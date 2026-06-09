@@ -1,0 +1,28 @@
+____________________________________________________________
+
+Issue:     #{issue_number}
+Status:    {status}
+Priority:  {priority}
+Size:      {size}    Points: {points}
+Dates:     {start_date} → {end_date}
+Blocked by: {blocked_by}
+____________________________________________________________
+
+
+{title}
+
+
+Description:
+  {description}
+
+
+Goal:
+  {goal}
+
+
+Notes:
+  {notes}
+
+
+Acceptance Criteria:
+{acceptance_criteria}

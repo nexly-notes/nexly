@@ -1,0 +1,115 @@
+{
+  "project": "NEXLY RN",
+  "description": "Ship the two-mode (Write + Study) MVP for nursing students",
+  "dates": {
+    "start": "2026-02-17",
+    "end": "2026-03-16"
+  },
+  "stories": [
+    {
+      "title": "Supabase auth + per-user RLS baseline",
+      "description": "Stand up Supabase auth and lock every table behind row-level security so each student only ever sees their own notes.",
+      "status": "Backlog",
+      "priority": "P0",
+      "goal": "Guarantee per-user data isolation before any feature touches notes.",
+      "notes": "RLS must precede every data feature, so this is the foundational story.",
+      "tasks": [
+        "Enable Supabase email auth and the JWT session flow",
+        "Add RLS policies scoping notes and users to auth.uid()"
+      ],
+      "acceptance_criteria": [
+        "An authenticated user can read and write only their own rows",
+        "A signed-out request to any table is rejected"
+      ],
+      "labels": ["feature", "backend"],
+      "blocked_by": [],
+      "size": "M",
+      "points": 5,
+      "issue_number": 1
+    },
+    {
+      "title": "Tiptap Write Mode editor shell",
+      "description": "Build the minimal Write Mode (\"Lecture\") editor on Tiptap with 30s autosave so students can capture notes fast.",
+      "status": "Backlog",
+      "priority": "P0",
+      "goal": "Give students a fast, low-friction capture surface for live lectures.",
+      "notes": "",
+      "tasks": [
+        "Mount the Tiptap editor in the authenticated note route",
+        "Wire 30s debounced autosave to the notes table"
+      ],
+      "acceptance_criteria": [
+        "Typing in the editor persists to the note within 30 seconds",
+        "Reloading the note restores the last saved content"
+      ],
+      "labels": ["feature", "frontend"],
+      "blocked_by": [1],
+      "size": "M",
+      "points": 5,
+      "issue_number": 2
+    },
+    {
+      "title": "Local-first autocomplete from the nursing-term DB",
+      "description": "Serve instant word completion from the local 5,000+ term dictionary as the primary, instant path for Write Mode.",
+      "status": "Backlog",
+      "priority": "P0",
+      "goal": "Deliver sub-100ms word completion with no API call as the primary path.",
+      "notes": "",
+      "tasks": [
+        "Index the local nursing-term dictionary for prefix lookup",
+        "Surface completions as Tab-acceptable ghost text in the editor"
+      ],
+      "acceptance_criteria": [
+        "A typed prefix returns a completion in under 100ms with no network call",
+        "Tab accepts the completion and continuing to type dismisses it"
+      ],
+      "labels": ["feature", "frontend"],
+      "blocked_by": [2],
+      "size": "M",
+      "points": 5,
+      "issue_number": 3
+    },
+    {
+      "title": "Study Mode key-term spotting",
+      "description": "Run GPT-4o-mini Structured Outputs over the note to surface a typed key-term list with emphasis cues in the Study Tools panel.",
+      "status": "Backlog",
+      "priority": "P1",
+      "goal": "Spot exam-relevant key terms so students know what to focus on.",
+      "notes": "Runs only in Study Mode; budget is under 5s per 3,000 words.",
+      "tasks": [
+        "Add an Edge Function that calls GPT-4o-mini with a Structured Outputs schema",
+        "Render the returned typed term list with emphasis cues in the Study Tools panel"
+      ],
+      "acceptance_criteria": [
+        "Switching to Study Mode populates the key-term list within 5s for a 3,000-word note",
+        "Each spotted term carries its emphasis cue"
+      ],
+      "labels": ["feature", "backend"],
+      "blocked_by": [2],
+      "size": "L",
+      "points": 8,
+      "issue_number": 4
+    },
+    {
+      "title": "Spike: ghost-text latency budget",
+      "description": "Measure GPT ghost-text round-trip latency to confirm the 500ms suppress threshold is achievable before committing to phrase prediction.",
+      "status": "Backlog",
+      "priority": "P2",
+      "goal": "De-risk the AI ghost-text feature by proving the latency budget up front.",
+      "notes": "Time-boxed investigation; output is a go/no-go recommendation, not shipped code.",
+      "tasks": [
+        "Instrument round-trip latency for GPT-4.1 nano phrase prediction",
+        "Record p50/p95 latencies against the 500ms suppress threshold"
+      ],
+      "acceptance_criteria": [
+        "A latency report records p50 and p95 against the 500ms threshold",
+        "The spike ends with a documented go/no-go on AI ghost text"
+      ],
+      "labels": ["spike"],
+      "blocked_by": [],
+      "size": "S",
+      "points": 2,
+      "issue_number": 5
+    }
+  ]
+}
