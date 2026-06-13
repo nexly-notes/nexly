@@ -1,8 +1,65 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NoteEditor } from "@/components/editor/note-editor";
 import { useNoteStore } from "@/stores/note-store";
+
+// EditorHeader navigates Home via the app router; mock it for jsdom.
+const mockPush = vi.hoisted(() => vi.fn());
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockPush, replace: vi.fn() }),
+}));
+
+// ---------------------------------------------------------------------------
+// SaveStatus indicator — status bar shows "Auto-saved" when saveStatus=saved
+// ---------------------------------------------------------------------------
+
+describe("status bar Auto-saved indicator", () => {
+  beforeEach(() => {
+    useNoteStore.setState({ mode: "create", saveStatus: "unsaved" });
+  });
+
+  it("shows 'Auto-saved' text when saveStatus is 'saved'", async () => {
+    render(<NoteEditor />);
+    await waitFor(() => {
+      expect(document.querySelector(".tiptap")).not.toBeNull();
+    });
+
+    useNoteStore.setState({ saveStatus: "saved" });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("autosave-status")).toHaveTextContent("Auto-saved");
+    });
+  });
+
+  it("does not show 'Auto-saved' text when saveStatus is 'unsaved'", async () => {
+    render(<NoteEditor />);
+    await waitFor(() => {
+      expect(document.querySelector(".tiptap")).not.toBeNull();
+    });
+
+    useNoteStore.setState({ saveStatus: "unsaved" });
+
+    // Give a moment for any potential render
+    await waitFor(() => {
+      expect(screen.queryByTestId("autosave-status")).not.toBeInTheDocument();
+    });
+  });
+
+  it("does not show 'Auto-saved' text when saveStatus is 'saving'", async () => {
+    render(<NoteEditor />);
+    await waitFor(() => {
+      expect(document.querySelector(".tiptap")).not.toBeNull();
+    });
+
+    useNoteStore.setState({ saveStatus: "saving" });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("autosave-status")).not.toBeInTheDocument();
+    });
+  });
+});
 
 function getCanvas(): HTMLElement {
   const canvas = document.querySelector<HTMLElement>(".tiptap");
@@ -108,6 +165,15 @@ describe("FR-01 two-mode editor", () => {
 
     expect(getCanvas()).toHaveAttribute("contenteditable", "true");
     expect(screen.getByTestId("mode-status")).toHaveTextContent("Lecture Mode");
+  });
+
+  it("navigates back to the landing list from the Home button (client-side, so the unmount flush runs)", async () => {
+    mockPush.mockClear();
+    await renderEditor();
+
+    fireEvent.click(screen.getByRole("button", { name: /home/i }));
+
+    expect(mockPush).toHaveBeenCalledWith("/");
   });
 
   it("keeps note content across mode toggles (no remount)", async () => {

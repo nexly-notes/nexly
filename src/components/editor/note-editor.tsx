@@ -9,12 +9,14 @@ import { EditorHeader } from "@/components/editor/editor-header";
 import { EditorToolbar } from "@/components/editor/editor-toolbar";
 import { StatusBar } from "@/components/editor/status-bar";
 import { StudyToolsPanel } from "@/components/editor/study-tools-panel";
+import { useAutosave } from "@/hooks/use-autosave";
 import { useNoteStore } from "@/stores/note-store";
 
 // Tiptap accepts either an HTML string or a JSON document as initial content.
 type EditorContent = string | object;
 
 type NoteEditorProps = {
+  noteId?: string;
   initialTitle?: string;
   initialContent?: EditorContent;
 };
@@ -23,17 +25,21 @@ type NoteEditorProps = {
 const useClientLayoutEffect =
   typeof window === "undefined" ? useEffect : useLayoutEffect;
 
-export function NoteEditor({ initialTitle, initialContent }: NoteEditorProps) {
+export function NoteEditor({ noteId, initialTitle, initialContent }: NoteEditorProps) {
   const mode = useNoteStore((state) => state.mode);
   const toggleMode = useNoteStore((state) => state.toggleMode);
+  const setNoteId = useNoteStore((state) => state.setNoteId);
   const setTitle = useNoteStore((state) => state.setTitle);
+  const setSaveStatus = useNoteStore((state) => state.setSaveStatus);
   const isWriteMode = mode === "create";
 
-  // Seed the title into the store once when this note opens, so the header and
-  // status bar read from a single source of truth.
+  // Seed note identity / title into the store once when this note opens, so the
+  // header, status bar, and autosave all read from a single source of truth.
   useEffect(() => {
+    setNoteId(noteId ?? null);
     setTitle(initialTitle ?? "");
-  }, [initialTitle, setTitle]);
+    setSaveStatus("saved");
+  }, [noteId, initialTitle, setNoteId, setTitle, setSaveStatus]);
 
   const editor = useEditor({
     extensions: [
@@ -44,7 +50,12 @@ export function NoteEditor({ initialTitle, initialContent }: NoteEditorProps) {
     editable: isWriteMode,
     // Editor renders client-side only to avoid SSR hydration mismatches.
     immediatelyRender: false,
+    onUpdate: () => {
+      setSaveStatus("unsaved");
+    },
   });
+
+  useAutosave(editor, noteId ?? null);
 
   // Flip editability on the live instance instead of remounting; pre-paint
   // so no frame ever shows Study mode with an editable canvas (<50ms budget).
