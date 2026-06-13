@@ -26,14 +26,14 @@ type SessionResult = {
 
 /**
  * Refreshes the Supabase session using the canonical `@supabase/ssr`
- * middleware pattern: cookies rotated during `getUser()` are written onto BOTH
+ * session-refresh pattern: cookies rotated during `getUser()` are written onto BOTH
  * the request (so the render pass downstream sees the fresh tokens) and the
  * returned response (so the browser persists them). Dropping either side
  * discards the rotated refresh token and eventually force-logs the user out.
  *
  * `@supabase/ssr` is imported dynamically so test suites can override
  * `createServerClient` via `vi.doMock`. Any failure is treated as "no user" —
- * middleware must never throw.
+ * the proxy must never throw.
  */
 async function refreshSession(request: NextRequest): Promise<SessionResult> {
   let response = NextResponse.next({ request });
@@ -88,13 +88,14 @@ function redirectWithSessionCookies(
 }
 
 /**
- * Session guard: refreshes the Supabase session and routes by auth state.
+ * Session guard (Next.js Proxy convention): refreshes the Supabase session and
+ * routes by auth state. Runs on the Node.js runtime.
  *
  * - Unauthenticated request to a protected route -> /login
  * - Authenticated request to /login or /signup    -> /
  * - Everything else passes through (with refreshed session cookies).
  */
-export async function middleware(request: NextRequest): Promise<NextResponse> {
+export async function proxy(request: NextRequest): Promise<NextResponse> {
   const { pathname } = request.nextUrl;
   const onPublicPath = isPublicPath(pathname);
 

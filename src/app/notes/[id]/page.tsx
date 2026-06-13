@@ -17,7 +17,7 @@ type NotePageProps = {
  *
  * Writing cookies during a Server Component render is not allowed by Next.js, so
  * `setAll` is wrapped in a try/catch: a token refresh that wants to persist new
- * cookies fails harmlessly here (middleware handles refresh writes instead).
+ * cookies fails harmlessly here (the proxy handles refresh writes instead).
  */
 function toCookieStore(store: Awaited<ReturnType<typeof cookies>>): CookieStore {
   return {
