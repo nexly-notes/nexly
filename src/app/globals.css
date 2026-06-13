@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+/* .idea is a transient sandbox artifact (sometimes an unreadable device node);
+   Turbopack's Tailwind scan panics if it reads it, so keep the scanner away. */
+@source not "../../.idea";
+
+:root {
+  color-scheme: light dark;
+  --background: #ffffff;
+  --surface: #f5f5f5;
+  --muted: #e6e3e3;
+  --foreground: #1a1a1a;
+  --muted-foreground: #6b6b6b;
+  --border: #ededed;
+  --ring: #ebebeb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0b0b0c;
+    --surface: #141414;
+    --muted: #1b1a1a;
+    --foreground: #e0e0e0;
+    --muted-foreground: #a0a0a0;
+    --border: #1f1f1f;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-muted: var(--muted);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+}
+
+@theme {
+  /* Single blue brand accent shared by both modes (FR-01) — modes are
+     differentiated by layout and badges, never by accent color. */
+  --color-brand: #3ba9ff;
+  --color-brand-hover: #2a8fd9;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-destructive: #ef4444;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* Editor typography — design.md editor type scale. */
+.tiptap {
+  outline: none;
+  font-size: 18px;
+  line-height: 1.6;
+  color: var(--foreground);
+}
+
+.tiptap p {
+  margin-bottom: 12px;
+}
+
+.tiptap h1 {
+  margin: 24px 0 12px;
+  font-size: 30px;
+  font-weight: 700;
+}
+
+.tiptap h2 {
+  margin: 20px 0 10px;
+  font-size: 24px;
+  font-weight: 600;
+}
+
+.tiptap h3 {
+  margin: 16px 0 8px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.tiptap ul,
+.tiptap ol {
+  margin-bottom: 12px;
+  padding-left: 24px;
+}
+
+.tiptap ul {
+  list-style: disc;
+}
+
+.tiptap ol {
+  list-style: decimal;
+}
+
+.tiptap li {
+  margin-bottom: 4px;
+}
+
+.tiptap blockquote {
+  margin-bottom: 12px;
+  padding-left: 12px;
+  border-left: 3px solid var(--color-brand);
+  font-style: italic;
+  color: var(--muted-foreground);
+}
+
+.tiptap code {
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+}
+
+.tiptap pre {
+  margin-bottom: 12px;
+  padding: 12px 16px;
+  border-radius: 8px;
+  background: var(--muted);
+  overflow-x: auto;
+}
+
+.tiptap pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.tiptap a {
+  color: var(--color-brand);
+  text-decoration: underline;
+}
+
+.tiptap hr {
+  margin: 16px 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
+.tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--muted-foreground);
+  opacity: 0.5;
+  pointer-events: none;
+}
