@@ -1,6 +1,7 @@
 "use client";
 
 import { BookOpen, House, PenLine } from "lucide-react";
+import { useRouter } from "next/navigation";
 
 import { useNoteStore } from "@/stores/note-store";
 import { NOTE_MODE_LABELS, type NoteMode } from "@/types/note";
@@ -11,8 +12,10 @@ type EditorHeaderProps = {
 };
 
 export function EditorHeader({ mode, onToggleMode }: EditorHeaderProps) {
+  const router = useRouter();
   const title = useNoteStore((state) => state.title);
   const setTitle = useNoteStore((state) => state.setTitle);
+  const setSaveStatus = useNoteStore((state) => state.setSaveStatus);
   const isStudyMode = mode === "study";
   const targetMode: NoteMode = isStudyMode ? "create" : "study";
   const targetLabel = NOTE_MODE_LABELS[targetMode];
@@ -22,6 +25,7 @@ export function EditorHeader({ mode, onToggleMode }: EditorHeaderProps) {
       <button
         type="button"
         aria-label="Home"
+        onClick={() => router.push("/")}
         className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-surface hover:text-foreground"
       >
         <House size={18} aria-hidden />
@@ -43,7 +47,10 @@ export function EditorHeader({ mode, onToggleMode }: EditorHeaderProps) {
         <input
           type="text"
           value={title}
-          onChange={(event) => setTitle(event.target.value)}
+          onChange={(event) => {
+            setTitle(event.target.value);
+            setSaveStatus("unsaved");
+          }}
           placeholder="Untitled Note"
           aria-label="Note title"
           className="w-full max-w-md truncate rounded-md border border-transparent bg-transparent px-2 py-1 text-xl font-semibold placeholder:text-muted-foreground hover:border-muted focus:border-brand focus:outline-none"

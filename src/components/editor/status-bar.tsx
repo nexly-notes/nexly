@@ -3,6 +3,7 @@
 import { useTiptapState } from "@tiptap/react";
 import { CircleCheck } from "lucide-react";
 
+import { useNoteStore } from "@/stores/note-store";
 import { NOTE_MODE_LABELS, type NoteMode } from "@/types/note";
 
 type StatusBarProps = {
@@ -10,6 +11,7 @@ type StatusBarProps = {
 };
 
 export function StatusBar({ mode }: StatusBarProps) {
+  const saveStatus = useNoteStore((state) => state.saveStatus);
   const { words, characters } = useTiptapState((snapshot) => {
     const text = snapshot.editor.state.doc.textContent;
     return {
@@ -25,6 +27,15 @@ export function StatusBar({ mode }: StatusBarProps) {
         <span>Characters: {characters.toLocaleString()}</span>
       </div>
       <div className="flex items-center gap-3">
+        {saveStatus === "saved" ? (
+          <span
+            data-testid="autosave-status"
+            className="flex items-center gap-1.5 text-success"
+          >
+            <CircleCheck size={14} aria-hidden />
+            Auto-saved
+          </span>
+        ) : null}
         <span className="flex items-center gap-1.5" data-testid="mode-status">
           <CircleCheck size={14} aria-hidden />
           <span>{NOTE_MODE_LABELS[mode]} Mode</span>
