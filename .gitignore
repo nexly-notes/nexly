@@ -48,12 +48,16 @@ coverage/
 Thumbs.db
 
 # --- Editor / IDE ---
-.idea/
+# No trailing slash: .idea can appear as a transient non-directory sandbox artifact.
+.idea
 *.swp
 *.swo
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
+
+# --- Reference repos (skills) ---
+.reference/
 
 # --- Claude local/transient ---
 .claude/plans/

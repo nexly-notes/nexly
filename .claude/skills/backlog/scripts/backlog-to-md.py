@@ -14,7 +14,9 @@ those sections simply omitted.
 
 The GitHub issue number is the story's identity; it links to GitHub when
 ``.github/config.json`` is readable and degrades to a plain ``#N`` reference
-when it is not. ``blocked_by`` is rendered as the ``#N`` issue numbers it lists.
+when it is not. ``blocked_by`` entries may be issue numbers (rendered ``#N``)
+or item titles (the pre-mint authoring form — rendered ``#N`` when the target
+is already minted, otherwise as the quoted title).
 
 Usage:
     python3 .claude/skills/backlog/scripts/backlog-to-md.py
@@ -106,9 +108,28 @@ def _code_list(entries: list[str]) -> str:
     return ", ".join(f"`{entry}`" for entry in entries)
 
 
-def _blocked_by_refs(blocked_by: list[int]) -> str:
-    """Render a blocked_by list as ``#N`` issue-number references."""
-    return " ".join(f"#{n}" for n in blocked_by)
+def _blocked_by_refs(blocked_by: list[int | str], num_by_title: dict[str, int]) -> str:
+    """Render blocked_by entries: ``#N`` for numbers and minted titles, else the quoted title."""
+    refs: list[str] = []
+    for entry in blocked_by:
+        if isinstance(entry, str):
+            num = num_by_title.get(entry)
+            refs.append(f"#{num}" if num else f'"{entry}"')
+        else:
+            refs.append(f"#{entry}")
+    return " ".join(refs)
+
+
+def _build_title_to_number(stories: list[dict]) -> dict[str, int]:
+    """Index minted items (stories + sub-issues) by title for blocked_by rendering."""
+    num_by_title: dict[str, int] = {}
+    for story in stories:
+        tasks = [t for t in story.get("tasks", []) if isinstance(t, dict)]
+        for item in [story, *tasks]:
+            title, number = item.get("title"), item.get("issue_number")
+            if title and number:
+                num_by_title[title] = number
+    return num_by_title
 
 
 def _issue_link(issue_number: int, repo_slug: str | None) -> str:
@@ -186,7 +207,9 @@ def _render_overview(stories: list[dict], repo_slug: str | None) -> str:
     return "\n".join(lines)
 
 
-def _append_groom_meta(story: dict, lines: list[str]) -> None:
+def _append_groom_meta(
+    story: dict, lines: list[str], num_by_title: dict[str, int]
+) -> None:
     """Append the flat grooming fields (labels, dependencies, size, points)."""
     meta: list[str] = []
     labels = story.get("labels") or []
@@ -194,7 +217,7 @@ def _append_groom_meta(story: dict, lines: list[str]) -> None:
         meta.append(f"- **Labels:** {_code_list(labels)}")
     blocked_by = story.get("blocked_by") or []
     if blocked_by:
-        meta.append(f"- **Blocked by:** {_blocked_by_refs(blocked_by)}")
+        meta.append(f"- **Blocked by:** {_blocked_by_refs(blocked_by, num_by_title)}")
     size = story.get("size")
     points = story.get("points")
     if size is not None or points is not None:
@@ -209,7 +232,9 @@ def _append_groom_meta(story: dict, lines: list[str]) -> None:
         lines.extend(meta)
 
 
-def _append_grooming(story: dict, lines: list[str]) -> None:
+def _append_grooming(
+    story: dict, lines: list[str], num_by_title: dict[str, int]
+) -> None:
     """Append optional grooming detail in the canonical issue-body order."""
     goal = (story.get("goal") or "").strip()
     if goal:
@@ -223,10 +248,12 @@ def _append_grooming(story: dict, lines: list[str]) -> None:
     notes = (story.get("notes") or "").strip()
     if notes:
         lines += ["", "**Notes**", "", notes]
-    _append_groom_meta(story, lines)
+    _append_groom_meta(story, lines, num_by_title)
 
 
-def _render_story(story: dict, repo_slug: str | None) -> str:
+def _render_story(
+    story: dict, repo_slug: str | None, num_by_title: dict[str, int]
+) -> str:
     """Render a single story: heading, metadata, description, any grooming."""
     title = story.get("title", "")
     priority = story.get("priority", "—")
@@ -242,19 +269,22 @@ def _render_story(story: dict, repo_slug: str | None) -> str:
     ]
     if description:
         lines += ["", description]
-    _append_grooming(story, lines)
+    _append_grooming(story, lines, num_by_title)
     return "\n".join(lines)
 
 
 def render_markdown(backlog: dict, source_label: str, repo_slug: str | None) -> str:
     """Render the whole backlog document from a parsed backlog dict."""
     stories = list(backlog.get("stories", []))
+    num_by_title = _build_title_to_number(stories)
     blocks = [
         _render_header(backlog, stories, source_label),
         _render_overview(stories, repo_slug),
     ]
     if stories:
-        story_blocks = "\n\n".join(_render_story(s, repo_slug) for s in stories)
+        story_blocks = "\n\n".join(
+            _render_story(s, repo_slug, num_by_title) for s in stories
+        )
         blocks.append(f"## Stories\n\n{story_blocks}")
     return "\n\n".join(blocks) + "\n"
 

@@ -2,9 +2,11 @@
 
 _Design specification for the NEXLY RN desktop/web experience._ Defines every screen, component, visual token, and interaction pattern from a design perspective. This document describes intended look and behavior only — it does not cover implementation.
 
-**Important!** Both modes share a single blue brand accent. Write and Study are differentiated by layout, badges, and contextual UI — never by accent color.
+**Important!** All modes share a single blue brand accent. Create and Edit (both editable; the PRD's capture and revision modes) and read-only Study are differentiated by layout, badges, and contextual UI — never by accent color.
 
-**Important! Scope:** This is the two-mode MVP design (Write + Study). Edit Mode, the Comparison/inline-diff dialog, Smart Summary, paid-tier/Subscription UI, and nursing templates are **Phase 2** (see `phase-2/prd.md`) and are called out where they would have appeared.
+**Important! Scope:** This is the three-mode MVP design (Create + Edit + Study). Create and Edit are both editable and behave identically for now (Edit gains revision-specific tooling later); Study is the read-only key-term lens. Only Edit's revision tooling — the Comparison/inline-diff dialog and version history — plus Smart Summary, paid-tier/Subscription UI, and nursing templates are **Phase 2** (see `phase-2/prd.md`) and are called out where they would have appeared.
+
+**Important! Build contract:** the PRD's FR set gates the MVP. Favorites, tags, folders, and archive appear in this spec but are non-gating stretch scope for the beta.
 
 ## 1. Design System Foundation
 
@@ -45,7 +47,7 @@ _Design specification for the NEXLY RN desktop/web experience._ Defines every sc
 **Theming**
 
 - Light and dark are full token sets; switching swaps the entire palette instantly.
-- Brand blue is constant across light, dark, and both modes.
+- Brand blue is constant across light, dark, and all modes.
 
 ### Typography
 
@@ -120,7 +122,7 @@ _Design specification for the NEXLY RN desktop/web experience._ Defines every sc
 - Footer (sticky): theme toggle row (sun/moon + label) and profile row (`32px` avatar, name, role, settings trigger)
 - Active row: surface background, foreground text, medium weight; inactive rows muted with same hover
 - Sections separated by inset dividers
-- Search filters notes by case-insensitive match on title only (MVP scope per FR-07; preview-text search is deferred)
+- Search filters notes by case-insensitive match on title only (MVP scope per FR-007; preview-text search is deferred)
 - Theme toggle cycles light ↔ dark; `system` is reachable via Settings
 
 ### Note List Page
@@ -132,7 +134,7 @@ _Design specification for the NEXLY RN desktop/web experience._ Defines every sc
 - Empty state: centered "No notes found" + "Try adjusting your search query" in muted foreground
 - View toggle: grid / list, `32px` segmented control inside a bordered group
 - Sort options: Recently Modified, Date Created, Title A-Z, Title Z-A
-- Clicking a card opens the note in Write Mode (the user's Default Mode); no open dialog
+- Clicking a card opens the note in Create Mode (the user's Default Mode); no open dialog
 - Quick Create opens a new blank note
 
 ### Note Card
@@ -147,15 +149,15 @@ _Design specification for the NEXLY RN desktop/web experience._ Defines every sc
 
 ### Quick Create
 
-- The "New" button creates a blank note and opens it directly in Write Mode
+- The "New" button creates a blank note and opens it directly in Create Mode
 - _The template picker (2×2 grid: SOAP Note, Drug Card, Care Plan) is Phase 2 — the MVP creates blank notes only_
 
 ### Mode Toggle
 
-- A Write/Study toggle in the editor header switches the active mode in place — there is no mode-choice dialog on open
-- Notes open in the user's Default Mode (Write unless changed in Preferences)
-- The Write header shows a "Study" toggle (book icon); the Study header shows a "Write" toggle (edit icon)
-- Keyboard: `Ctrl+M` toggles mode; transition completes in <50ms
+- A mode control in the editor header cycles the active mode in place (Create → Edit → Study → Create) — there is no mode-choice dialog on open
+- Notes open in the user's Default Mode (Create unless changed in Preferences)
+- The control shows the next mode in the cycle with its icon: Create advances to Edit (edit icon), Edit advances to Study (book icon), Study advances back to Create (edit icon)
+- Keyboard: `Ctrl+M` cycles to the next mode; transition completes in <50ms
 
 ### Editor Header (Classic Layout)
 
@@ -163,7 +165,7 @@ _Design specification for the NEXLY RN desktop/web experience._ Defines every sc
 - Left: home icon button
 - Center: inline editable title — placeholder "Untitled Note", brand border on focus, muted border on hover, truncates
 - Adjacent: "Add tag" chip pill — brand border and text on hover
-- Right cluster: Study toggle, layout toggle, theme toggle, print, pin, more
+- Right cluster: mode cycle control, layout toggle, theme toggle, print, pin, more
 - Layout toggle: switches Classic ↔ Modern shell, with tooltip "Switch to Modern" / "Switch to Classic"
 - Theme toggle: light ↔ dark; sun icon in dark, moon icon in light
 
@@ -185,7 +187,7 @@ _MVP/beta scope: the Modern shell, its Classic/Modern layout toggle, and the sel
 - Collapsed: small menu pill at left-center, `36px` square, large radius, bordered, subtle shadow
 - Expanded: vertical icon column inside a large-radius bordered panel with large shadow and a full-viewport click-to-close backdrop
 - Open animation: fade + slide-in from left, `200ms`
-- Items (separated): close → Home → Study Toggle → Add Tag → Switch to Classic → Theme → Print → Pin → More
+- Items (separated): close → Home → Mode Cycle → Add Tag → Switch to Classic → Theme → Print → Pin → More
 - Each button is a ghost icon button with a right-aligned tooltip
 
 ### Editor Canvas
@@ -216,7 +218,7 @@ _MVP/beta scope: the Modern shell, its Classic/Modern layout toggle, and the sel
 
 ### Ghost Text Autocomplete
 
-- Active only in Write Mode when enabled
+- Active in Create & Edit when enabled (never in Study)
 - Local-first: local nursing-term completion is the instant primary path (<100ms); AI phrase ghost-text appears after a `150ms` typing pause when available (else suppressed)
 - Requires at least 2 characters and a word boundary after the cursor
 - `Tab` accepts the completion plus a trailing space; `Escape` clears it
@@ -224,18 +226,18 @@ _MVP/beta scope: the Modern shell, its Classic/Modern layout toggle, and the sel
 
 ### Status Bar
 
-- Used in classic Write and Study modes
+- Used in classic Create, Edit, and Study modes
 - Top border, small padding, `12px` muted text
 - Left: words count, characters count, optional key-term count with bookmark icon, optional "Unsaved changes" with amber alert icon
 - Right: "Auto-saved" when saved and clean, then mode label with check icon
-- Mode labels: "Write Mode", "Study Mode"
+- Mode labels: "Create Mode", "Edit Mode", "Study Mode"
 - Numbers are locale-formatted
 
 ### Study Mode Page
 
 - Two-column shell: read-only article (left) + Study Tools Panel (right, `320px`)
-- Header: home button, plain note title, badge cluster ("Study Mode" + topic, e.g. "Cardiology"), actions (Write toggle, theme, print, more)
-- Write toggle switches to Write Mode
+- Header: home button, plain note title, badge cluster ("Study Mode" + topic, e.g. "Cardiology"), actions (mode cycle control, theme, print, more)
+- The mode cycle control advances Study back to Create Mode
 - Body: scrollable article, max `900px`, `18px` text, `1.6` leading
 - Footer: status bar in Study mode with key-term count
 
@@ -259,15 +261,17 @@ _MVP/beta scope: the Modern shell, its Classic/Modern layout toggle, and the sel
 - Right sidebar, `320px`, left border, conditionally shown
 - Header: sparkles icon + "Study Tools" title, close button
 - Scrollable body with `24px` section rhythm; each section has an uppercase muted heading
-  1. **Key Terms Spotted**: tappable rows (click-to-jump to the term in the article); hover adds a brand left border and lifts the background; a "Copy terms" action copies the list to the clipboard
+  1. **Key Terms Spotted**: tappable rows (click-to-jump to the term in the article); hover adds a brand left border and lifts the background; each row carries a small helpful/not-helpful feedback affordance (logs a usage event); a "Copy terms" action copies the list to the clipboard
   2. **Exam-Relevant**: count line ("3 exam-relevant items highlighted") derived from the spotting emphasis cues
+- On long notes, key terms populate progressively (chunked spotting); notes beyond ~12,000 words show a truncation notice (terms cover the first ~12,000 words)
+- **AI-paused state**: when the daily runaway backstop trips, the panel shows a non-blocking notice ("AI assist is paused until tomorrow"); the local term-definition hover and all editing remain available
 - _Smart Summary ("Key Takeaways" + Regenerate) and the Refinement section (Expand Shortcuts, Clarify Text) are Phase 2._
 - Action button pattern: bordered medium-radius row with muted icon, left-aligned label, surface hover
 
-### Edit Mode & Comparison Dialog (Phase 2)
+### Edit Mode Revision Tooling & Comparison Dialog (Phase 2)
 
-- _Edit Mode as a distinct page and the unified inline-diff "Compare Changes" dialog are deferred to Phase 2 (see `phase-2/prd.md`)._
-- _In the MVP, notes are edited in Write Mode; there is no separate Edit page, inline diff, or compare/revert view._
+- _Edit ships in the MVP as an editable mode identical to Create — the same classic shell, toolbar, autocomplete, and status bar. Only its revision-specific tooling is deferred: the unified inline-diff "Compare Changes" dialog and version history are Phase 2 (see `phase-2/prd.md`)._
+- _In the MVP, Edit has no inline diff or compare/revert view; it is simply a second editable surface alongside Create._
 
 ### Settings Drawer
 
@@ -297,8 +301,8 @@ _MVP/beta scope: the Modern shell, its Classic/Modern layout toggle, and the sel
 
 - Theme picker: 3 tiles (light / dark / system); active uses brand border + tint
 - Toggle rows: Spell Check, Word Count — default on
-- Auto-save: locked-on, display-only status row (always enabled; cannot be turned off, per the NFR-02 no-data-loss guarantee) — not a user-disableable toggle
-- Default Mode picker: Write / Study tiles
+- Auto-save: locked-on, display-only status row (always enabled; cannot be turned off, per NFR-002's while-connected no-data-loss guarantee and local crash-recovery copy) — not a user-disableable toggle
+- Default Mode picker: Create / Edit / Study tiles
 
 **Shortcuts**
 
@@ -311,7 +315,7 @@ _MVP/beta scope: the Modern shell, its Classic/Modern layout toggle, and the sel
 
 ### Post-MVP Components (Phase 2)
 
-_The click-to-pin Definition-on-demand popup, the shorthand Expansion Preview dialog, the Edit Mode page + Comparison/inline-diff dialog, the Smart Summary block, the template picker, and the Subscription/tier UI are designed-for or deferred to Phase 2. The term hover tooltip (see Term Definition Tooltip under Inline Annotations) is in MVP._
+_The click-to-pin Definition-on-demand popup, the shorthand Expansion Preview dialog, Edit Mode's Comparison/inline-diff dialog and version history (the editable Edit mode itself is in the MVP), the Smart Summary block, the template picker, and the Subscription/tier UI are designed-for or deferred to Phase 2. The term hover tooltip (see Term Definition Tooltip under Inline Annotations) is in MVP._
 
 ## 3. User Flow Screens
 
@@ -319,11 +323,11 @@ _The click-to-pin Definition-on-demand popup, the shorthand Expansion Preview di
 
 1. User lands on the note list
 2. Sidebar exposes navigation, search, tags, folders, theme toggle, settings
-3. Tapping a card opens the note in Write Mode (the user's Default Mode)
-4. The Write/Study toggle (or `Ctrl+M`) switches modes in place
-5. Quick Create makes a blank note and opens the Write editor
+3. Tapping a card opens the note in Create Mode (the user's Default Mode)
+4. The mode cycle control (or `Ctrl+M`) advances modes in place (Create → Edit → Study)
+5. Quick Create makes a blank note and opens the Create editor
 
-### Write Note Editor
+### Note Editor (Create / Edit)
 
 **Classic Shell**
 
@@ -331,7 +335,8 @@ _The click-to-pin Definition-on-demand popup, the shorthand Expansion Preview di
 - Ghost-text autocomplete active (local-first)
 - Title edited inline in the header; toolbar acts on both body and title
 - Header tag chip opens tag entry
-- Study toggle in the header switches to Study Mode
+- The mode cycle control in the header advances to the next mode (Create → Edit → Study)
+- Create and Edit share this shell and behave identically for now (Edit's revision tooling is Phase 2)
 
 **Modern Shell**
 
@@ -346,12 +351,18 @@ _The click-to-pin Definition-on-demand popup, the shorthand Expansion Preview di
 - Read-only article surface
 - Inline annotations make terms interactive on hover
 - Study Tools Panel provides spotted key terms and exam-relevant count (starts open)
-- Header Write toggle switches back to Write Mode
+- Header mode cycle control advances back to Create Mode
 - Status bar shows Study mode with key-term count
+
+### Sign-Up (stub)
+
+- Email/password form (Supabase Auth); detailed visual design TBD using the tokens in this document
+- Account creation requires accepting the beta ToS — didactic lecture notes only; entering patient-identifying information (PHI) is prohibited
+- The ToS gate lives at sign-up so contextual onboarding stays non-blocking (FR-008)
 
 ### Onboarding
 
-- Contextual onboarding tooltips introduce the two modes (Write, Study) on first use; dismissable and non-blocking (no 2-screen flow)
+- Contextual onboarding tooltips introduce the three modes (Create, Edit, Study) on first use; dismissable and non-blocking (no 2-screen flow)
 - Applies the tokens and components defined in this document
 
 ## 4. Interaction Patterns
@@ -368,23 +379,23 @@ _The click-to-pin Definition-on-demand popup, the shorthand Expansion Preview di
 - Local nursing-term completion is the instant primary path; AI phrase ghost-text is triggered after a `150ms` typing pause when available
 - Requires at least 2 characters and a word boundary right after the caret
 - `Tab` accepts the suggestion plus a trailing space; `Escape` clears it
-- Suppressed automatically outside Write Mode
+- Suppressed automatically outside Create & Edit
 
 ### Note Card Interactions
 
 - Hover reveals the overflow menu and raises a medium shadow
 - Favorite star toggles between muted outline and filled amber
-- Card click opens the note in Write Mode; the overflow button and star do not trigger the card click
+- Card click opens the note in Create Mode; the overflow button and star do not trigger the card click
 
 ### Mode Differentiation
 
 - Brand color stays constant across modes (intentional)
-- Write vs Study is communicated through:
+- Create/Edit vs Study is communicated through:
   1. Layout and shell (editable canvas vs read-only article)
   2. Header badge in Study ("Study Mode" + topic)
-  3. Status bar label and icon
+  3. Status bar label and icon ("Create Mode" / "Edit Mode" / "Study Mode")
   4. Availability of inline annotations and the Study Tools Panel (Study only)
-  5. The Write/Study mode toggle in the header
+  5. The mode cycle control in the header
 
 ## 5. Accessibility
 
@@ -425,7 +436,7 @@ _Important!_ The product is desktop-first. Mobile layouts are not yet designed.
 - Sidebar nav: document, star, clock, archive, folder, search
 - Status / validation: check circle, alert circle, star, calendar, bookmark
 - Study tools: sparkles, book, copy
-- Mode toggle: book (to Study), edit (to Write)
+- Mode cycle: book (to Study), edit (to Create / Edit)
 - Theme: sun, moon, monitor
 - Settings: gear, sliders, keyboard, camera, user
 - Editor header extras: printer, pin, more, edit

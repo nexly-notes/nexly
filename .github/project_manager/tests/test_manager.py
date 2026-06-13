@@ -99,7 +99,9 @@ def all_items(pm_instance):
 
 class TestConstants:
     def test_status_enum(self):
-        assert set(pm.STATUS_ORDER) == {"Backlog", "Ready", "In Progress", "Done"}
+        assert set(pm.STATUS_ORDER) == {
+            "Backlog", "Ready", "In Progress", "In Review", "Done",
+        }
 
     def test_priority_enum(self):
         assert set(pm.PRIORITY_ORDER) == {"P0", "P1", "P2"}
@@ -108,7 +110,8 @@ class TestConstants:
         assert pm.VALID_TRANSITIONS == {
             "Backlog": {"In Progress", "Ready"},
             "Ready": {"In Progress", "Backlog"},
-            "In Progress": {"Done", "Backlog"},
+            "In Progress": {"Done", "Backlog", "In Review"},
+            "In Review": {"Done", "In Progress"},
             "Done": {"In Progress"},
         }
 
@@ -149,8 +152,10 @@ class TestSortKey:
 
     def test_status_order(self):
         assert pm._sort_key("status", {"status": "Done"}) == 0
-        assert pm._sort_key("status", {"status": "Ready"}) == 2
-        assert pm._sort_key("status", {"status": "Backlog"}) == 3
+        assert pm._sort_key("status", {"status": "In Review"}) == 1
+        assert pm._sort_key("status", {"status": "In Progress"}) == 2
+        assert pm._sort_key("status", {"status": "Ready"}) == 3
+        assert pm._sort_key("status", {"status": "Backlog"}) == 4
 
     def test_issue_number(self):
         assert pm._sort_key("issue_number", {"issue_number": 5}) == 5
@@ -220,6 +225,24 @@ class TestValidateTransition:
     def test_done_to_in_progress_allowed(self):
         assert pm._validate_transition("Done", "In Progress") is None
 
+    def test_in_progress_to_in_review_allowed(self):
+        assert pm._validate_transition("In Progress", "In Review") is None
+
+    def test_in_review_to_done_allowed(self):
+        assert pm._validate_transition("In Review", "Done") is None
+
+    def test_in_review_back_to_in_progress_allowed(self):
+        assert pm._validate_transition("In Review", "In Progress") is None
+
+    def test_backlog_to_in_review_blocked(self):
+        err = pm._validate_transition("Backlog", "In Review")
+        assert err is not None and "Cannot move" in err
+
+    def test_done_to_in_review_blocked(self):
+        # A reopened issue goes back to work, not review.
+        err = pm._validate_transition("Done", "In Review")
+        assert err is not None and "Cannot move" in err
+
 
 class TestIsUnblocked:
     def test_empty(self):
@@ -234,6 +257,20 @@ class TestIsUnblocked:
     def test_missing_number(self):
         assert pm._is_unblocked([99], {}) is False
 
+    def test_title_dep_done(self):
+        assert pm._is_unblocked(["Setup"], {"Setup": "Done"}) is True
+
+    def test_title_dep_not_done(self):
+        assert pm._is_unblocked(["Setup"], {"Setup": "Backlog"}) is False
+
+    def test_missing_title(self):
+        assert pm._is_unblocked(["Nope"], {}) is False
+
+    def test_mixed_deps(self):
+        deps = [11, "Setup"]
+        assert pm._is_unblocked(deps, {11: "Done", "Setup": "Done"}) is True
+        assert pm._is_unblocked(deps, {11: "Done", "Setup": "Backlog"}) is False
+
 
 class TestBuildStatusMap:
     def test_maps_issue_numbers_across_levels(self):
@@ -244,9 +281,26 @@ class TestBuildStatusMap:
         assert m[202] == "Backlog"
         assert m[203] == "Backlog"
 
-    def test_items_without_number_skipped(self):
+    def test_maps_titles_across_levels(self):
+        # Every item also contributes its exact title as a key.
+        m = pm.build_status_map_from_backlog(SAMPLE_BACKLOG)
+        assert m["Research feature X"] == "In Progress"
+        assert m["Setup CI pipeline"] == "Done"
+        assert m["Fix login bug"] == "Backlog"
+
+    def test_items_without_number_contribute_title_key(self):
+        # Numberless items are still title-addressable (pre-mint readiness).
         backlog = {"stories": [{"title": "X", "status": "Backlog", "tasks": []}]}
-        assert pm.build_status_map_from_backlog(backlog) == {}
+        assert pm.build_status_map_from_backlog(backlog) == {"X": "Backlog"}
+
+    def test_int_and_digit_title_keys_stay_distinct(self):
+        backlog = {"stories": [
+            {"title": "123", "status": "Done", "issue_number": None, "tasks": []},
+            {"title": "Y", "status": "Backlog", "issue_number": 123, "tasks": []},
+        ]}
+        m = pm.build_status_map_from_backlog(backlog)
+        assert m["123"] == "Done"
+        assert m[123] == "Backlog"
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +581,13 @@ class TestUpdateStory:
         data = json.loads(backlog_file.read_text(encoding="utf-8"))
         assert data["stories"][0]["status"] == "Done"
 
+    def test_status_to_in_review(self, backlog_file):
+        # In Progress → In Review is the PR-automation hop.
+        assert ProjectManager(backlog_file).update(
+            key="Research feature X", status="In Review") == 0
+        data = json.loads(backlog_file.read_text(encoding="utf-8"))
+        assert data["stories"][0]["status"] == "In Review"
+
     def test_priority(self, backlog_file):
         ProjectManager(backlog_file).update(key="Project setup", priority="P0")
         data = json.loads(backlog_file.read_text(encoding="utf-8"))
@@ -749,6 +810,56 @@ class TestResolve:
         assert "No backlog items to resolve." in capsys.readouterr().out
 
 
+# A never-synced backlog: no issue_number anywhere, deps named by title.
+SAMPLE_BACKLOG_TITLE_DEPS: dict = {
+    "project": "T",
+    "stories": [
+        {
+            "title": "Story A", "status": "Done", "priority": "P0",
+            "blocked_by": [], "issue_number": None, "tasks": [],
+        },
+        {
+            "title": "Story B", "status": "Backlog", "priority": "P1",
+            "blocked_by": ["Story A"], "issue_number": None, "tasks": [],
+        },
+        {
+            "title": "Story C", "status": "Backlog", "priority": "P2",
+            "blocked_by": ["Story B"], "issue_number": None, "tasks": [],
+        },
+    ],
+}
+
+
+class TestResolveTitleDeps:
+    @pytest.fixture
+    def title_deps_file(self, tmp_path):
+        p = tmp_path / "backlog.json"
+        p.write_text(json.dumps(SAMPLE_BACKLOG_TITLE_DEPS), encoding="utf-8")
+        return p
+
+    def test_promotes_via_title_deps_pre_mint(self, title_deps_file):
+        # Story B's only dep is the Done "Story A" — named by title because
+        # no issue numbers exist yet.
+        assert ProjectManager(title_deps_file).resolve() == 0
+        data = json.loads(title_deps_file.read_text(encoding="utf-8"))
+        assert data["stories"][1]["status"] == "Ready"     # Story B
+        assert data["stories"][2]["status"] == "Backlog"   # Story C blocked
+
+    def test_mixed_deps_resolve(self, tmp_path):
+        backlog = {"stories": [
+            {"title": "A", "status": "Done", "priority": "P0",
+             "blocked_by": [], "issue_number": 1, "tasks": []},
+            {"title": "B", "status": "Done", "priority": "P0",
+             "blocked_by": [], "issue_number": None, "tasks": []},
+            {"title": "C", "status": "Backlog", "priority": "P1",
+             "blocked_by": [1, "B"], "issue_number": None, "tasks": []},
+        ]}
+        p = tmp_path / "b.json"; p.write_text(json.dumps(backlog), encoding="utf-8")
+        ProjectManager(p).resolve()
+        data = json.loads(p.read_text(encoding="utf-8"))
+        assert data["stories"][2]["status"] == "Ready"
+
+
 SAMPLE_BACKLOG_READY: dict = {
     "project": "T",
     "stories": [
@@ -855,6 +966,176 @@ class TestReadyTop:
 # ---------------------------------------------------------------------------
 # run() dispatcher
 # ---------------------------------------------------------------------------
+
+
+class TestStringTasksTolerated:
+    """Backlogs storing `tasks` as plain checklist strings must not crash."""
+
+    @pytest.fixture
+    def string_task_file(self, tmp_path):
+        data = {"project": "T", "description": "d", "stories": [
+            {"title": "S", "status": "Backlog", "priority": "P0",
+             "blocked_by": [], "issue_number": 1,
+             "tasks": ["step one", "step two"]},
+        ]}
+        p = tmp_path / "b.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        return p
+
+    def test_dict_tasks_filters_strings(self):
+        assert pm._dict_tasks({"tasks": ["note", {"title": "X"}]}) == [{"title": "X"}]
+
+    def test_load_all_items_skips_strings(self, string_task_file):
+        items = ProjectManager(string_task_file).load_all_items()
+        assert [i["title"] for i in items] == ["S"]
+
+    def test_status_map_skips_strings(self, string_task_file):
+        backlog = ProjectManager(string_task_file).load_backlog()
+        # String tasks contribute nothing; the story keys by number + title.
+        assert pm.build_status_map_from_backlog(backlog) == {
+            1: "Backlog", "S": "Backlog",
+        }
+
+    def test_view_by_number(self, string_task_file, capsys):
+        assert ProjectManager(string_task_file).view(key="1", json=True) == 0
+        assert json.loads(capsys.readouterr().out)["title"] == "S"
+
+    def test_progress(self, string_task_file, capsys):
+        assert ProjectManager(string_task_file).progress() == 0
+
+    def test_resolve(self, string_task_file, capsys):
+        assert ProjectManager(string_task_file).resolve() == 0
+        data = json.loads(string_task_file.read_text(encoding="utf-8"))
+        assert data["stories"][0]["status"] == "Ready"
+        assert data["stories"][0]["tasks"] == ["step one", "step two"]
+
+
+class _FakeSyncer:
+    """Stands in for sync.Syncer: records construction kwargs + run calls."""
+
+    last: "_FakeSyncer | None" = None
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.calls: list[tuple[str, dict]] = []
+        _FakeSyncer.last = self
+
+    def run(self, mode, **kw):
+        self.calls.append((mode, kw))
+        return 0
+
+
+@pytest.fixture
+def fake_syncer(monkeypatch):
+    from project_manager import sync as sync_mod
+    _FakeSyncer.last = None
+    monkeypatch.setattr(sync_mod, "Syncer", _FakeSyncer)
+    return _FakeSyncer
+
+
+class TestSyncerDelegates:
+    def test_pull_passes_statuses(self, backlog_file, fake_syncer):
+        assert ProjectManager(backlog_file).pull(statuses=True) == 0
+        assert fake_syncer.last.calls == [
+            ("pull", {"dry_run": False, "statuses": True}),
+        ]
+
+    def test_pull_statuses_defaults_false(self, backlog_file, fake_syncer):
+        ProjectManager(backlog_file).pull()
+        assert fake_syncer.last.calls == [
+            ("pull", {"dry_run": False, "statuses": False}),
+        ]
+
+    def test_push_status_delegates(self, backlog_file, fake_syncer):
+        assert ProjectManager(backlog_file).push_status(
+            dry_run=True, only=[3, 7]) == 0
+        assert fake_syncer.last.calls == [
+            ("push-status", {"dry_run": True, "only": [3, 7]}),
+        ]
+
+    def test_push_status_passes_overrides(self, backlog_file, fake_syncer):
+        ProjectManager(backlog_file).push_status(repo="o/r", project=7, owner="me")
+        kwargs = fake_syncer.last.kwargs
+        assert kwargs["repo"] == "o/r"
+        assert kwargs["project"] == 7
+        assert kwargs["owner"] == "me"
+
+    def test_push_status_registered(self, pm_instance):
+        assert pm_instance._COMMAND_MAP["push-status"] == "push_status"
+
+
+class TestSyncAutoResolve:
+    def test_resolves_before_sync(self, resolve_backlog_file, fake_syncer):
+        # Story B (unblocked Backlog) is Ready in the saved file before
+        # the Syncer push runs.
+        assert ProjectManager(resolve_backlog_file).sync() == 0
+        data = json.loads(resolve_backlog_file.read_text(encoding="utf-8"))
+        assert data["stories"][1]["status"] == "Ready"
+        assert fake_syncer.last.calls == [("sync", {"dry_run": False})]
+
+    def test_no_resolve_skips_promotion(self, resolve_backlog_file, fake_syncer):
+        ProjectManager(resolve_backlog_file).sync(resolve_first=False)
+        data = json.loads(resolve_backlog_file.read_text(encoding="utf-8"))
+        assert data["stories"][1]["status"] == "Backlog"
+
+    def test_dry_run_does_not_write(self, resolve_backlog_file, fake_syncer, capsys):
+        before = resolve_backlog_file.read_text(encoding="utf-8")
+        ProjectManager(resolve_backlog_file).sync(dry_run=True)
+        assert resolve_backlog_file.read_text(encoding="utf-8") == before
+        assert "Would resolve 1 item(s) to Ready." in capsys.readouterr().out
+
+    def test_delete_all_skips_resolve(self, resolve_backlog_file, fake_syncer):
+        ProjectManager(resolve_backlog_file).sync(delete_all=True)
+        data = json.loads(resolve_backlog_file.read_text(encoding="utf-8"))
+        assert data["stories"][1]["status"] == "Backlog"
+        assert fake_syncer.last.calls == [("delete-all", {"dry_run": False})]
+
+
+class TestValidate:
+    def test_valid_backlog_returns_zero(self, pm_instance, capsys):
+        assert pm_instance.validate() == 0
+        assert "valid" in capsys.readouterr().out
+
+    def test_invalid_backlog_returns_one(self, tmp_path, capsys):
+        data = {"stories": [
+            {"title": "A", "status": "Backlog", "blocked_by": ["Nope"],
+             "issue_number": None, "tasks": []},
+        ]}
+        p = tmp_path / "b.json"; p.write_text(json.dumps(data), encoding="utf-8")
+        assert ProjectManager(p).validate() == 1
+        assert "Nope" in capsys.readouterr().err
+
+    def test_validate_registered(self, pm_instance):
+        assert pm_instance._COMMAND_MAP["validate"] == "validate"
+
+    def test_validate_dispatch(self, pm_instance):
+        assert pm_instance.run("validate") == 0
+
+
+class TestSyncValidatesFirst:
+    @pytest.fixture
+    def invalid_backlog_file(self, tmp_path):
+        data = {"stories": [
+            {"title": "A", "status": "Backlog", "blocked_by": ["Nope"],
+             "issue_number": None, "tasks": []},
+        ]}
+        p = tmp_path / "b.json"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        return p
+
+    def test_sync_fails_before_resolve_and_syncer(
+        self, invalid_backlog_file, fake_syncer, capsys
+    ):
+        before = invalid_backlog_file.read_text(encoding="utf-8")
+        assert ProjectManager(invalid_backlog_file).sync() == 1
+        # The resolve-first local write never ran and no Syncer was built.
+        assert invalid_backlog_file.read_text(encoding="utf-8") == before
+        assert fake_syncer.last is None
+        assert "Nope" in capsys.readouterr().err
+
+    def test_delete_all_skips_validation(self, invalid_backlog_file, fake_syncer):
+        assert ProjectManager(invalid_backlog_file).sync(delete_all=True) == 0
+        assert fake_syncer.last.calls == [("delete-all", {"dry_run": False})]
 
 
 class TestRun:

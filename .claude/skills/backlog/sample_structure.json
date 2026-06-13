@@ -1,115 +1,413 @@
 {
-  "project": "NEXLY RN",
-  "description": "Ship the two-mode (Write + Study) MVP for nursing students",
+  "project": "Nexly Notes",
+  "description": "Establish foundational infrastructure and ML pipeline for NBA prediction model",
   "dates": {
     "start": "2026-02-17",
-    "end": "2026-03-16"
+    "end": "2026-03-02"
   },
   "stories": [
     {
-      "title": "Supabase auth + per-user RLS baseline",
-      "description": "Stand up Supabase auth and lock every table behind row-level security so each student only ever sees their own notes.",
-      "status": "Backlog",
+      "title": "Python ML pipeline project setup",
+      "description": "Establish the Python ML pipeline scaffold: virtualenv, pinned dependencies, pytest + mypy config, and the directory layout the training jobs will live in.",
+      "status": "Done",
       "priority": "P0",
-      "goal": "Guarantee per-user data isolation before any feature touches notes.",
-      "notes": "RLS must precede every data feature, so this is the foundational story.",
-      "tasks": [
-        "Enable Supabase email auth and the JWT session flow",
-        "Add RLS policies scoping notes and users to auth.uid()"
-      ],
+      "goal": "Stand up a clean training scaffold that unblocks ingestion and model work",
+      "notes": "Foundational \u2014 every downstream backend story depends on this.",
+      "start_date": "2026-02-17",
+      "end_date": "2026-02-18",
       "acceptance_criteria": [
-        "An authenticated user can read and write only their own rows",
-        "A signed-out request to any table is rejected"
+        "Python virtual environment created",
+        "All dependencies installed successfully",
+        "Pytest and mypy configured",
+        "Pipeline folder structure created"
       ],
-      "labels": ["feature", "backend"],
+      "labels": ["infra", "python"],
       "blocked_by": [],
       "size": "M",
-      "points": 5,
-      "issue_number": 1
+      "points": 3,
+      "tasks": [
+        {
+          "title": "Bootstrap virtualenv and install ML pipeline dependencies",
+          "description": "Create the project venv and pin the ML deps (xgboost, pandas, numpy, pyarrow).",
+          "status": "Done",
+          "priority": "P1",
+          "goal": "",
+          "notes": "",
+          "start_date": "2026-02-17",
+          "end_date": "2026-02-17",
+          "acceptance_criteria": [],
+          "labels": ["python"],
+          "blocked_by": [],
+          "size": "S",
+          "points": 1,
+          "issue_number": 472
+        },
+        {
+          "title": "Configure pytest and mypy with repo-wide defaults",
+          "description": "Add pytest.ini and mypy.ini at the pipeline root so all jobs share a single config.",
+          "status": "Done",
+          "priority": "P2",
+          "goal": "",
+          "notes": "",
+          "start_date": "2026-02-18",
+          "end_date": "2026-02-18",
+          "acceptance_criteria": [],
+          "labels": ["python"],
+          "blocked_by": [],
+          "size": "S",
+          "points": 1,
+          "issue_number": 476
+        }
+      ],
+      "issue_number": 478
     },
     {
-      "title": "Tiptap Write Mode editor shell",
-      "description": "Build the minimal Write Mode (\"Lecture\") editor on Tiptap with 30s autosave so students can capture notes fast.",
-      "status": "Backlog",
+      "title": "Firebase Firestore configuration",
+      "description": "Stand up the Firestore backend used by the prediction service: project creation, SDK init, collection schemas, and security rules locked down against anonymous writes.",
+      "status": "Done",
       "priority": "P0",
-      "goal": "Give students a fast, low-friction capture surface for live lectures.",
+      "goal": "Provision the datastore that predictions are written to",
       "notes": "",
-      "tasks": [
-        "Mount the Tiptap editor in the authenticated note route",
-        "Wire 30s debounced autosave to the notes table"
-      ],
+      "start_date": "2026-02-17",
+      "end_date": "2026-02-19",
       "acceptance_criteria": [
-        "Typing in the editor persists to the note within 30 seconds",
-        "Reloading the note restores the last saved content"
+        "Firebase project created and credentials configured",
+        "Firestore SDK initialized",
+        "Collection schemas defined",
+        "Security rules configured and tested"
       ],
-      "labels": ["feature", "frontend"],
-      "blocked_by": [1],
-      "size": "M",
-      "points": 5,
-      "issue_number": 2
-    },
-    {
-      "title": "Local-first autocomplete from the nursing-term DB",
-      "description": "Serve instant word completion from the local 5,000+ term dictionary as the primary, instant path for Write Mode.",
-      "status": "Backlog",
-      "priority": "P0",
-      "goal": "Deliver sub-100ms word completion with no API call as the primary path.",
-      "notes": "",
-      "tasks": [
-        "Index the local nursing-term dictionary for prefix lookup",
-        "Surface completions as Tab-acceptable ghost text in the editor"
-      ],
-      "acceptance_criteria": [
-        "A typed prefix returns a completion in under 100ms with no network call",
-        "Tab accepts the completion and continuing to type dismisses it"
-      ],
-      "labels": ["feature", "frontend"],
-      "blocked_by": [2],
-      "size": "M",
-      "points": 5,
-      "issue_number": 3
-    },
-    {
-      "title": "Study Mode key-term spotting",
-      "description": "Run GPT-4o-mini Structured Outputs over the note to surface a typed key-term list with emphasis cues in the Study Tools panel.",
-      "status": "Backlog",
-      "priority": "P1",
-      "goal": "Spot exam-relevant key terms so students know what to focus on.",
-      "notes": "Runs only in Study Mode; budget is under 5s per 3,000 words.",
-      "tasks": [
-        "Add an Edge Function that calls GPT-4o-mini with a Structured Outputs schema",
-        "Render the returned typed term list with emphasis cues in the Study Tools panel"
-      ],
-      "acceptance_criteria": [
-        "Switching to Study Mode populates the key-term list within 5s for a 3,000-word note",
-        "Each spotted term carries its emphasis cue"
-      ],
-      "labels": ["feature", "backend"],
-      "blocked_by": [2],
-      "size": "L",
-      "points": 8,
-      "issue_number": 4
-    },
-    {
-      "title": "Spike: ghost-text latency budget",
-      "description": "Measure GPT ghost-text round-trip latency to confirm the 500ms suppress threshold is achievable before committing to phrase prediction.",
-      "status": "Backlog",
-      "priority": "P2",
-      "goal": "De-risk the AI ghost-text feature by proving the latency budget up front.",
-      "notes": "Time-boxed investigation; output is a go/no-go recommendation, not shipped code.",
-      "tasks": [
-        "Instrument round-trip latency for GPT-4.1 nano phrase prediction",
-        "Record p50/p95 latencies against the 500ms suppress threshold"
-      ],
-      "acceptance_criteria": [
-        "A latency report records p50 and p95 against the 500ms threshold",
-        "The spike ends with a documented go/no-go on AI ghost text"
-      ],
-      "labels": ["spike"],
+      "labels": ["infra", "firebase"],
       "blocked_by": [],
       "size": "S",
       "points": 2,
-      "issue_number": 5
+      "tasks": [
+        {
+          "title": "Create Firebase project and load credentials via env",
+          "description": "Provision the Firebase project, generate a service-account key, and wire it into the SDK via env vars.",
+          "status": "Done",
+          "priority": "P1",
+          "goal": "",
+          "notes": "",
+          "start_date": "2026-02-17",
+          "end_date": "2026-02-18",
+          "acceptance_criteria": [],
+          "labels": ["firebase"],
+          "blocked_by": [],
+          "size": "S",
+          "points": 1,
+          "issue_number": 473
+        },
+        {
+          "title": "Write Firestore security rules for predictions collection",
+          "description": "Lock the predictions collection to authenticated reads only; no anonymous writes.",
+          "status": "Done",
+          "priority": "P1",
+          "goal": "",
+          "notes": "",
+          "start_date": "2026-02-19",
+          "end_date": "2026-02-19",
+          "acceptance_criteria": [
+            "Anonymous writes rejected in the rules test suite"
+          ],
+          "labels": ["firebase", "security"],
+          "blocked_by": [],
+          "size": "S",
+          "points": 2,
+          "issue_number": 477
+        }
+      ],
+      "issue_number": 479
+    },
+    {
+      "title": "Which NBA stats features yield best XGBoost accuracy",
+      "description": "Investigate which NBA team-level statistics produce the highest XGBoost prediction accuracy, then publish a ranked feature list with expected impact to seed downstream model training.",
+      "status": "In Progress",
+      "priority": "P0",
+      "goal": "Rank candidate features so the training pipeline starts from the strongest set",
+      "notes": "Spike output feeds the XGBoost training pipeline (issue 405).",
+      "start_date": "2026-02-19",
+      "end_date": "2026-02-23",
+      "acceptance_criteria": [
+        "Feature importance analysis completed and documented",
+        "Top 10 features identified and ranked by importance",
+        "Feature set recommendations provided with pros/cons",
+        "Expected accuracy impact assessed for each feature"
+      ],
+      "labels": ["spike", "ml"],
+      "blocked_by": [],
+      "size": "M",
+      "points": 5,
+      "issue_number": 447,
+      "tasks": [
+        {
+          "title": "Run feature importance analysis on historical NBA data",
+          "description": "Score every candidate feature against the historical NBA dataset and rank by XGBoost importance.",
+          "status": "Done",
+          "priority": "P1",
+          "goal": "",
+          "notes": "",
+          "start_date": "2026-02-19",
+          "end_date": "2026-02-21",
+          "acceptance_criteria": [],
+          "labels": ["ml"],
+          "blocked_by": [],
+          "size": "M",
+          "points": 3,
+          "issue_number": 475
+        },
+        {
+          "title": "Draft feature recommendation memo with expected accuracy impact",
+          "description": "Summarize the top features in a short memo noting which ones are worth bringing into training and the expected accuracy lift.",
+          "status": "Backlog",
+          "priority": "P2",
+          "goal": "",
+          "notes": "",
+          "start_date": "",
+          "end_date": "",
+          "acceptance_criteria": [],
+          "labels": ["ml", "docs"],
+          "blocked_by": [],
+          "size": "S",
+          "points": 1,
+          "issue_number": 456
+        }
+      ]
+    },
+    {
+      "title": "Next.js 15 project setup",
+      "description": "Bootstrap the frontend with Next.js 15, TypeScript in strict mode, the App Router, and lint/format tooling so UI work can start on a clean baseline.",
+      "status": "In Progress",
+      "priority": "P0",
+      "goal": "Give UI work a clean, strict-typed baseline",
+      "notes": "",
+      "start_date": "2026-02-18",
+      "end_date": "2026-02-22",
+      "acceptance_criteria": [
+        "Next.js 15 project initialized successfully",
+        "TypeScript configured and working",
+        "App Router setup complete",
+        "ESLint and Prettier configured"
+      ],
+      "labels": ["frontend"],
+      "blocked_by": [],
+      "size": "S",
+      "points": 3,
+      "issue_number": 446,
+      "tasks": [
+        {
+          "title": "Initialize Next.js 15 project with App Router",
+          "description": "Run create-next-app with the App Router preset and confirm a TypeScript hello-world renders.",
+          "status": "Done",
+          "priority": "P1",
+          "goal": "",
+          "notes": "",
+          "start_date": "2026-02-18",
+          "end_date": "2026-02-19",
+          "acceptance_criteria": [],
+          "labels": ["frontend"],
+          "blocked_by": [],
+          "size": "S",
+          "points": 2,
+          "issue_number": 474
+        },
+        {
+          "title": "Configure ESLint, Prettier, and tsconfig for strict mode",
+          "description": "Land the shared lint/format config and turn on strict TS so future PRs catch type errors at commit time.",
+          "status": "Backlog",
+          "priority": "P2",
+          "goal": "",
+          "notes": "",
+          "start_date": "",
+          "end_date": "",
+          "acceptance_criteria": [],
+          "labels": ["frontend", "tooling"],
+          "blocked_by": [],
+          "size": "S",
+          "points": 1,
+          "issue_number": 457
+        }
+      ]
+    },
+    {
+      "title": "NBA Stats API data ingestion",
+      "description": "Build the upstream data feed: a rate-limited NBA Stats API client that pulls team stats for the current season and persists raw responses to Parquet for downstream training.",
+      "status": "Backlog",
+      "priority": "P0",
+      "goal": "Provide replayable raw training input from the NBA Stats API",
+      "notes": "Unblocked: depends on the ML scaffold (436) and its pytest config (509), both Done.",
+      "start_date": "2026-02-23",
+      "end_date": "2026-02-26",
+      "acceptance_criteria": [
+        "NBA API client wrapper implemented with rate limiting",
+        "Team stats fetching working for current season",
+        "Data stored in Parquet format",
+        "API integration tested and documented"
+      ],
+      "labels": ["backend", "data"],
+      "blocked_by": [436],
+      "size": "L",
+      "points": 8,
+      "issue_number": 445,
+      "tasks": [
+        {
+          "title": "Build NBA Stats API client with rate limiting",
+          "description": "Thin wrapper around the NBA Stats endpoints with a token bucket so we don't trip the upstream limiter.",
+          "status": "Backlog",
+          "priority": "P1",
+          "goal": "",
+          "notes": "",
+          "start_date": "",
+          "end_date": "",
+          "acceptance_criteria": [],
+          "labels": ["backend"],
+          "blocked_by": [],
+          "size": "M",
+          "points": 3,
+          "issue_number": 458
+        },
+        {
+          "title": "Persist fetched team stats to Parquet files",
+          "description": "Serialize each pull to a Parquet file keyed by season/date for replayable training input.",
+          "status": "Backlog",
+          "priority": "P2",
+          "goal": "",
+          "notes": "",
+          "start_date": "",
+          "end_date": "",
+          "acceptance_criteria": [],
+          "labels": ["backend", "data"],
+          "blocked_by": [],
+          "size": "M",
+          "points": 2,
+          "issue_number": 462
+        }
+      ]
+    },
+    {
+      "title": "Pre-market vs post-line-release prediction timing",
+      "description": "Compare prediction quality and data availability for pre-market vs post-line-release windows, then commit to a daily pipeline cadence with a recorded rationale in decisions.md.",
+      "status": "Backlog",
+      "priority": "P1",
+      "goal": "Commit to a daily pipeline cadence with a recorded rationale",
+      "notes": "Blocked until the feature spike (447) lands so timing is judged on the real feature set.",
+      "start_date": "",
+      "end_date": "",
+      "acceptance_criteria": [
+        "Timing decision documented in decisions.md",
+        "Trade-off analysis between pre-market and post-release completed",
+        "Cron schedule recommended for daily pipeline execution"
+      ],
+      "labels": ["spike"],
+      "blocked_by": [447],
+      "size": "S",
+      "points": 2,
+      "issue_number": 448,
+      "tasks": [
+        {
+          "title": "Compare data availability windows for pre-market vs post-release",
+          "description": "Enumerate what NBA data is fresh in each window and where the cutoffs land relative to a daily cron firing.",
+          "status": "Backlog",
+          "priority": "P1",
+          "goal": "",
+          "notes": "",
+          "start_date": "",
+          "end_date": "",
+          "acceptance_criteria": [],
+          "labels": ["spike"],
+          "blocked_by": [],
+          "size": "S",
+          "points": 1,
+          "issue_number": 459
+        },
+        {
+          "title": "Record timing decision and propose cron schedule",
+          "description": "Capture the chosen window in decisions.md and propose the daily cron schedule that follows from it.",
+          "status": "Backlog",
+          "priority": "P2",
+          "goal": "",
+          "notes": "",
+          "start_date": "",
+          "end_date": "",
+          "acceptance_criteria": [],
+          "labels": ["docs"],
+          "blocked_by": [],
+          "size": "S",
+          "points": 1,
+          "issue_number": 460
+        }
+      ]
+    },
+    {
+      "title": "XGBoost model training pipeline",
+      "description": "Wire together the end-to-end training pipeline: feature engineering, cross-validated XGBoost training, and prediction writeback into Firestore.",
+      "status": "Backlog",
+      "priority": "P0",
+      "goal": "Produce predictions end-to-end and write them to Firestore",
+      "notes": "Capstone story \u2014 blocked on the feature spike (by issue number) and the data feed (by title, the pre-mint form; sync converts it to the issue number).",
+      "start_date": "",
+      "end_date": "",
+      "acceptance_criteria": [
+        "Feature engineering pipeline implemented",
+        "XGBoost model training with cross-validation working",
+        "Predictions generated for test data",
+        "Predictions successfully written to Firestore"
+      ],
+      "labels": ["ml", "backend"],
+      "blocked_by": [447, "NBA Stats API data ingestion"],
+      "size": "L",
+      "points": 13,
+      "issue_number": 405,
+      "tasks": [
+        {
+          "title": "Implement XGBoost training loop with cross-validation",
+          "description": "K-fold the feature matrix and train XGBoost with early stopping; emit the trained model artifact.",
+          "status": "Backlog",
+          "priority": "P1",
+          "goal": "",
+          "notes": "",
+          "start_date": "",
+          "end_date": "",
+          "acceptance_criteria": [],
+          "labels": ["ml"],
+          "blocked_by": [],
+          "size": "L",
+          "points": 5,
+          "issue_number": 461
+        },
+        {
+          "title": "Generate predictions and persist to Firestore",
+          "description": "Score the test set with the trained model and write each prediction row to Firestore for the UI to consume.",
+          "status": "Backlog",
+          "priority": "P2",
+          "goal": "",
+          "notes": "",
+          "start_date": "",
+          "end_date": "",
+          "acceptance_criteria": [],
+          "labels": ["ml", "backend"],
+          "blocked_by": [],
+          "size": "M",
+          "points": 3,
+          "issue_number": 463
+        }
+      ]
+    },
+    {
+      "title": "Investigate prediction caching layer",
+      "description": "Lean, ungroomed story authored straight into the backlog \u2014 exercises the lean shape (only title/description, defaults elsewhere) that must load and sync alongside fully-groomed items.",
+      "status": "Backlog",
+      "priority": "",
+      "goal": "",
+      "notes": "",
+      "start_date": "",
+      "end_date": "",
+      "acceptance_criteria": [],
+      "labels": [],
+      "blocked_by": [],
+      "size": "",
+      "points": null,
+      "issue_number": 449,
+      "tasks": []
     }
   ]
 }

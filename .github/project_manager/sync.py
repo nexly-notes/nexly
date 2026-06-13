@@ -5,9 +5,12 @@ talk to the ``gh`` CLI. The CLI wrapper lives in ``project_manager.cli``.
 
 Every item — story OR sub-issue — is a real GitHub issue with its own
 project-board item, ``Status``/``Priority``/``Start date``/``Target date``
-fields, ``labels``, and ``blocked_by`` (issue-number) edges. Parent↔child
-links are reconciled as native sub-issues. Issue identity is the bare
-``title``. ``pull`` mirrors GitHub state back into ``backlog.json``.
+fields, ``labels``, and ``blocked_by`` edges. ``blocked_by`` entries may be
+authored as item **titles** (pre-mint); ``sync`` validates, mints issues,
+converts titles to the minted issue numbers, and writes them back — every
+remote pass then operates on numbers. Parent↔child links are reconciled as
+native sub-issues. Issue identity is the bare ``title``. ``pull`` mirrors
+GitHub state back into ``backlog.json``.
 """
 from __future__ import annotations
 
@@ -21,6 +24,7 @@ from typing import Any
 
 from .config import DATA_PATHS, OWNER, PROJECT_NUMBER, REPO
 from .utils.gh_utils import gh_json, run
+from .validation import validate_backlog
 
 MAX_WORKERS = 8
 BATCH_SIZE = 30
@@ -127,6 +131,26 @@ def _fetch_all_issues(repo: str, state: str = "all") -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
+def _dict_tasks(story: dict[str, Any]) -> list[dict]:
+    """Return only dict-shaped tasks.
+
+    Some backlogs carry plain-string checklist lines in ``tasks``; those are
+    not sub-issue items, so every sync/pull pass skips them (and the pull
+    tree rebuild preserves them in place).
+
+    Args:
+        story (dict): Story record.
+
+    Returns:
+        list[dict]: The story's sub-issue items.
+
+    Example:
+        >>> _dict_tasks({"tasks": ["note", {"title": "X"}]})
+        [{'title': 'X'}]
+    """
+    return [t for t in story.get("tasks", []) if isinstance(t, dict)]
+
+
 def _build_metadata(backlog: dict) -> dict:
     return {
         "description": backlog.get("description", ""),
@@ -160,7 +184,7 @@ def load_flat_data(
     stories = list(backlog_data.get("stories", []))
     tasks: list[dict] = []
     for story in stories:
-        tasks.extend(story.get("tasks", []))
+        tasks.extend(_dict_tasks(story))
     return stories, tasks, metadata, backlog_data
 
 
@@ -176,6 +200,51 @@ def _apply_issue_number(item: dict, num_by_title: dict[str, int]) -> None:
     title = item.get("title")
     if title in num_by_title:
         item["issue_number"] = num_by_title[title]
+
+
+def convert_blocked_by_titles(all_items: list[dict]) -> int:
+    """Replace title (str) ``blocked_by`` entries with minted issue numbers.
+
+    Runs after Pass 1 has minted every issue, so each title resolves via the
+    in-memory items. Lists are mutated **in place**; the items are live
+    references into the backlog structure, so the writeback persists the
+    converted lists.
+
+    Args:
+        all_items (list[dict]): All issue-bearing items (stories + sub-issues).
+
+    Returns:
+        int: Number of entries converted.
+
+    Raises:
+        ValueError: A title entry has no minted number (cannot happen after
+            validation + Pass 1, but stays loud rather than emitting a
+            string into GraphQL).
+
+    Example:
+        >>> items = [{"title": "A", "issue_number": 5},
+        ...          {"title": "B", "issue_number": 6, "blocked_by": ["A"]}]
+        >>> convert_blocked_by_titles(items)
+        1
+        >>> items[1]["blocked_by"]
+        [5]
+    """
+    num_by_title = _title_to_issue_number(all_items)
+    converted = 0
+    for item in all_items:
+        blocked_by = item.get("blocked_by") or []
+        for i, entry in enumerate(blocked_by):
+            if not isinstance(entry, str):
+                continue
+            num = num_by_title.get(entry)
+            if num is None:
+                raise ValueError(
+                    f"blocked_by title {entry!r} on item "
+                    f"{item.get('title', '')!r} has no minted issue number"
+                )
+            blocked_by[i] = num
+            converted += 1
+    return converted
 
 
 def save_flat_data(
@@ -209,7 +278,7 @@ def save_flat_data(
     num_by_title = _title_to_issue_number(stories + tasks)
     for story in backlog_data.get("stories", []):
         _apply_issue_number(story, num_by_title)
-        for task in story.get("tasks", []):
+        for task in _dict_tasks(story):
             _apply_issue_number(task, num_by_title)
     backlog_path.write_text(json.dumps(backlog_data, indent=2), encoding="utf-8")
 
@@ -224,14 +293,19 @@ def _collect_blocking_pairs(
 ) -> tuple[list[tuple[int, int]], set[int]]:
     """Collect ``(blocked_num, blocker_num)`` pairs straight from item data.
 
-    ``blocked_by`` already holds issue numbers, so no id→number map is
-    needed — each item contributes one pair per blocker.
+    Runs **post-conversion**: every ``blocked_by`` entry must already be an
+    issue number — a leftover title (str) raises rather than leaking into
+    GraphQL.
 
     Args:
         items (list[dict]): All issue-bearing items (stories + sub-issues).
 
     Returns:
         tuple[list[tuple[int, int]], set[int]]: ``(pairs, involved_numbers)``.
+
+    Raises:
+        ValueError: A ``blocked_by`` entry is not an int (conversion was
+            skipped or failed).
 
     Example:
         >>> _collect_blocking_pairs(
@@ -245,6 +319,11 @@ def _collect_blocking_pairs(
         if not item_num:
             continue
         for blocker_num in item.get("blocked_by", []):
+            if not isinstance(blocker_num, int) or isinstance(blocker_num, bool):
+                raise ValueError(
+                    f"blocked_by entry {blocker_num!r} on #{item_num} is not "
+                    "an issue number — run convert_blocked_by_titles() first"
+                )
             pairs.append((item_num, blocker_num))
             involved.update({item_num, blocker_num})
     return pairs, involved
@@ -353,10 +432,10 @@ def set_blocking_relationships(
 ) -> None:
     """Set blocking relationships via batched ``addBlockedBy`` mutations.
 
-    ``blocked_by`` holds issue numbers, so pairs are read straight from the
-    items. Pairs already present on GitHub (``existing_edges``) and pairs
-    whose blocker node isn't found (dangling numbers from the two-pass
-    flow) are skipped.
+    Runs post-conversion, so ``blocked_by`` holds only issue numbers and
+    pairs are read straight from the items (a leftover title raises). Pairs
+    already present on GitHub (``existing_edges``) and pairs whose blocker
+    node isn't found (dangling external numbers) are skipped.
 
     Args:
         repo (str): ``owner/name`` slug.
@@ -848,7 +927,7 @@ def _desired_sub_issue_pairs(stories: list[dict[str, Any]]) -> set[tuple[int, in
         pnum = story.get("issue_number")
         if not pnum:
             continue
-        for task in story.get("tasks", []):
+        for task in _dict_tasks(story):
             cnum = task.get("issue_number")
             if cnum:
                 pairs.add((pnum, cnum))
@@ -1202,6 +1281,9 @@ _BASE_FIELD_SPECS: list[tuple[str, str]] = [
     ("Target date", "end_date"),
 ]
 
+# Narrow spec used by `push-status`: only the Status board field is written.
+_STATUS_FIELD_SPECS: list[tuple[str, str]] = [("Status", "status")]
+
 
 # Keys `gh project item-list --format json` emits alongside `id`/`content`
 # when the corresponding project field is set; mapped to the canonical
@@ -1301,10 +1383,12 @@ def _mutations_for_item(
     field_map: dict[str, dict],
     start_idx: int,
     remote_values: dict[str, Any],
+    specs: list[tuple[str, str]] | None = None,
 ) -> tuple[list[str], int]:
     mutations: list[str] = []
     idx = start_idx
-    for field_name, task_key in _field_specs_for_item(task):
+    for field_name, task_key in (specs if specs is not None
+                                 else _field_specs_for_item(task)):
         raw = task.get(task_key)
         field = field_map.get(field_name)
         if not field or raw is None or raw == "":
@@ -1327,12 +1411,14 @@ def _collect_mutations(
     project_id: str,
     field_map: dict[str, dict],
     remote_by_item: dict[str, dict[str, Any]],
+    specs: list[tuple[str, str]] | None = None,
 ) -> list[str]:
     """Build GraphQL mutation aliases for all tasks with known project items.
 
     ``remote_by_item`` is the ``{item_id: {field_name: value}}`` map produced
     by :func:`_build_remote_values_map`; fields whose in-memory value already
     matches the remote snapshot are filtered out before a mutation is built.
+    ``specs`` narrows the field set (default: every base field).
     """
     mutations: list[str] = []
     idx = 0
@@ -1346,7 +1432,7 @@ def _collect_mutations(
             continue
         per_item_remote = remote_by_item.get(item_id, {})
         new_mutations, idx = _mutations_for_item(
-            t, item_id, project_id, field_map, idx, per_item_remote
+            t, item_id, project_id, field_map, idx, per_item_remote, specs
         )
         mutations.extend(new_mutations)
     return mutations
@@ -1554,7 +1640,7 @@ def _clear_issue_numbers(backlog_data: dict[str, Any], backlog_path: Path) -> No
     # Every item is an issue now, so clear numbers on stories AND children.
     for story in backlog_data.get("stories", []):
         story["issue_number"] = None
-        for task in story.get("tasks", []):
+        for task in _dict_tasks(story):
             task["issue_number"] = None
     backlog_path.write_text(json.dumps(backlog_data, indent=2), encoding="utf-8")
     print(f"\nCleared issue numbers from {backlog_path}")
@@ -1649,16 +1735,21 @@ def _writeback_numbers(
 # and Start/Target date (native date fields, created if missing). "Target
 # date" is a GitHub built-in; local ``end_date`` pushes to it.
 _REQUIRED_FIELDS: list[tuple[str, str, list[str] | None]] = [
-    ("Status", "SINGLE_SELECT", ["Backlog", "Ready", "In Progress", "Done"]),
+    ("Status", "SINGLE_SELECT",
+     ["Backlog", "Ready", "In Progress", "In Review", "Done"]),
     ("Priority", "SINGLE_SELECT", ["P0", "P1", "P2"]),
     ("Start date", "DATE", None),
     ("Target date", "DATE", None),
 ]
 
 # Single-select options that must exist on an already-present field. `resolve`
-# emits the "Ready" status, so the board's Status field needs that option even
-# when the field predates this tool.
-_REQUIRED_OPTIONS: list[tuple[str, str]] = [("Status", "Ready")]
+# emits the "Ready" status and the PR automation emits "In Review", so the
+# board's Status field needs both options even when the field predates this
+# tool. Matching is case-sensitive — the board option must read "In Review".
+_REQUIRED_OPTIONS: list[tuple[str, str]] = [
+    ("Status", "Ready"),
+    ("Status", "In Review"),
+]
 
 
 def _print_sync_plan(
@@ -1718,6 +1809,10 @@ _PULLED_ITEM_BASE: dict[str, Any] = {
 # Fields GitHub is authoritative for on pull (overwrite the local value).
 _PULL_GITHUB_FIELDS = ("title", "description", "labels", "priority", "blocked_by")
 
+# Merge candidates: the always-pulled fields plus `status`, which the pulled
+# payload only carries under `pull --statuses` (absent key → local preserved).
+_PULL_MERGE_FIELDS = _PULL_GITHUB_FIELDS + ("status",)
+
 
 def _invert_edges(edges: set[tuple[int, int]]) -> dict[int, list[int]]:
     """Invert ``{(blocked, blocker)}`` edges to ``{blocked: [blocker, ...]}``.
@@ -1769,11 +1864,23 @@ def _pull_board_priority(board: list[dict]) -> dict[int, str]:
     return out
 
 
+def _pull_board_status(board: list[dict]) -> dict[int, str]:
+    """Build ``{issue_number: status}`` from project board items."""
+    out: dict[int, str] = {}
+    for it in board:
+        num = (it.get("content") or {}).get("number")
+        status = it.get("status")
+        if num and status:
+            out[num] = status
+    return out
+
+
 def _assemble_pulled_issues(
     nums: set[int],
     details: dict[int, dict],
     priority: dict[int, str],
     blocked: dict[int, list[int]],
+    board_status: dict[int, str] | None = None,
 ) -> dict[int, dict]:
     """Combine per-issue GitHub facts into the pull ``issues`` payload.
 
@@ -1782,10 +1889,15 @@ def _assemble_pulled_issues(
         details (dict): ``{num: {title, body, labels, state}}``.
         priority (dict): ``{num: priority}`` from the board.
         blocked (dict): ``{num: [blocker_num, ...]}`` from inverted edges.
+        board_status (dict | None): ``{num: status}`` from the board; only
+            passed under ``pull --statuses``. A closed issue maps to ``Done``
+            regardless of its board status; the ``status`` key is omitted
+            entirely when neither source knows one, so the merge preserves
+            the local value.
 
     Returns:
         dict[int, dict]: ``{num: {title, description, labels, priority,
-        blocked_by}}``.
+        blocked_by}}`` (plus ``status`` when pulled).
 
     Example:
         >>> _assemble_pulled_issues({1}, {1: {"title": "A", "body": ""}}, {}, {})
@@ -1801,6 +1913,11 @@ def _assemble_pulled_issues(
             "priority": priority.get(num, ""),
             "blocked_by": sorted(blocked.get(num, [])),
         }
+        if board_status is not None:
+            status = ("Done" if d.get("state") == "closed"
+                      else board_status.get(num, ""))
+            if status:
+                issues[num]["status"] = status
     return issues
 
 
@@ -1856,7 +1973,7 @@ def _index_local_items(backlog_data: dict) -> tuple[dict[int, dict], dict[str, d
     by_title: dict[str, dict] = {}
     for story in backlog_data.get("stories", []):
         _index_one_local(story, by_num, by_title)
-        for task in story.get("tasks", []):
+        for task in _dict_tasks(story):
             _index_one_local(task, by_num, by_title)
     return by_num, by_title
 
@@ -1875,7 +1992,7 @@ def _adopt_numbers(by_title: dict[str, dict], issues: dict[int, dict]) -> None:
 
 
 def _merge_github_fields(item: dict, data: dict) -> None:
-    for field in _PULL_GITHUB_FIELDS:
+    for field in _PULL_MERGE_FIELDS:
         if field in data:
             item[field] = data[field]
 
@@ -1917,7 +2034,7 @@ def _pull_order(backlog_data: dict, merged: dict[int, dict]) -> list[int]:
     order: list[int] = []
     seen: set[int] = set()
     for story in backlog_data.get("stories", []):
-        for item in [story, *story.get("tasks", [])]:
+        for item in [story, *_dict_tasks(story)]:
             num = item.get("issue_number")
             if num in merged and num not in seen:
                 order.append(num)
@@ -1935,8 +2052,11 @@ def _as_leaf(item: dict) -> dict:
 
 
 def _assemble_story(merged: dict[int, dict], num: int, children: dict[int, list[int]]) -> dict:
+    # GitHub wins for the sub-issue (dict) children; plain-string checklist
+    # entries are local-only data and survive the rebuild in place.
     item = merged[num]
-    item["tasks"] = [_as_leaf(merged[c]) for c in children.get(num, [])]
+    plain = [t for t in item.get("tasks", []) if not isinstance(t, dict)]
+    item["tasks"] = plain + [_as_leaf(merged[c]) for c in children.get(num, [])]
     return item
 
 
@@ -2004,7 +2124,7 @@ def _print_item_diff(num: int, old_item: dict | None, new_item: dict) -> None:
     if old_item is None:
         print(f"  + new #{num}: {new_item.get('title', '')}")
         return
-    for field in _PULL_GITHUB_FIELDS:
+    for field in _PULL_MERGE_FIELDS:
         if old_item.get(field) != new_item.get(field):
             print(f"  ~ #{num} {field}: {old_item.get(field)!r} -> {new_item.get(field)!r}")
 
@@ -2015,6 +2135,32 @@ def print_pull_diff(old: dict, new: dict) -> None:
     new_by_num, _ = _index_local_items(new)
     for num, item in new_by_num.items():
         _print_item_diff(num, old_by_num.get(num), item)
+
+
+# ---------------------------------------------------------------------------
+# push-status: narrow Status-only board write
+# ---------------------------------------------------------------------------
+
+
+def _status_push_targets(items: list[dict], only: list[int] | None) -> list[dict]:
+    """Keep items that already carry an ``issue_number``, optionally narrowed.
+
+    Args:
+        items (list[dict]): Flattened stories + sub-issues.
+        only (list[int] | None): Issue numbers to limit the push to.
+
+    Returns:
+        list[dict]: Items eligible for a Status push.
+
+    Example:
+        >>> _status_push_targets([{"issue_number": 5}, {"title": "new"}], None)
+        [{'issue_number': 5}]
+    """
+    targets = [t for t in items if t.get("issue_number")]
+    if only:
+        wanted = {int(n) for n in only}
+        targets = [t for t in targets if t["issue_number"] in wanted]
+    return targets
 
 
 # ---------------------------------------------------------------------------
@@ -2030,6 +2176,8 @@ class Syncer:
         "delete-all": "delete_all",
         "delete_all": "delete_all",
         "pull": "pull",
+        "push-status": "push_status",
+        "push_status": "push_status",
     }
 
     def __init__(
@@ -2058,17 +2206,33 @@ class Syncer:
         # Every item (story + sub-issue) is an issue, so all_items drives
         # creation, bodies, labels, board items + fields, and blocked_by.
         stories, tasks, _, backlog_data = load_flat_data(self.backlog_path)
+        # Validate before ANY GitHub write — _fetch_project_metadata already
+        # self-heals board fields, so it must not run on an invalid graph.
+        errors = validate_backlog(backlog_data)
+        if errors:
+            print(f"Backlog validation failed ({len(errors)} error(s)):",
+                  file=sys.stderr)
+            for err in errors:
+                print(f"  - {err}", file=sys.stderr)
+            return 1
         all_items = stories + tasks
         print(f"Sync mode: {len(stories)} stories, {len(tasks)} sub-issues")
         if dry_run:
             return self._sync_dry_run(all_items)
         project_id, field_map = self._fetch_project_metadata()
         changed = self._ensure_all_issues(all_items)
+        # Titles → freshly minted numbers, in place; remote passes (board
+        # fields, blocked-by edges) read the now-numeric lists.
+        converted = convert_blocked_by_titles(all_items)
+        if converted:
+            print(f"  Converted {converted} blocked_by title(s) to issue numbers")
         self._refresh_issue_bodies(all_items)
         self._reconcile_labels(all_items)
         self._run_remote_passes(all_items, project_id, field_map, backlog_data)
         self._reconcile_sub_issues(stories)
-        self._maybe_writeback(stories, tasks, backlog_data, changed, dry_run)
+        self._maybe_writeback(
+            stories, tasks, backlog_data, changed or converted > 0, dry_run
+        )
         return 0
 
     def _sync_dry_run(self, all_items: list[dict]) -> int:
@@ -2144,11 +2308,14 @@ class Syncer:
         _delete_issues_batched(self.repo, issues)
         _clear_issue_numbers(backlog_data, self.backlog_path)
 
-    def pull(self, *, dry_run: bool = False) -> int:
+    def pull(self, *, dry_run: bool = False, statuses: bool = False) -> int:
         """Mirror GitHub board + issue state back into ``backlog.json``.
 
         Args:
             dry_run (bool): Print a per-item diff and write nothing.
+            statuses (bool): Also make GitHub authoritative for ``status``
+                (closed issue → ``Done``, else the board status; local value
+                preserved when neither is known).
 
         Returns:
             int: 0.
@@ -2163,7 +2330,7 @@ class Syncer:
         """
         backlog_data = json.loads(self.backlog_path.read_text(encoding="utf-8"))
         print(f"Pull mode: mirroring project {self.project} into backlog...")
-        merged = merge_pulled(backlog_data, self._fetch_pull_state())
+        merged = merge_pulled(backlog_data, self._fetch_pull_state(statuses))
         if dry_run:
             print("\nPull dry-run (no writes):")
             print_pull_diff(backlog_data, merged)
@@ -2171,7 +2338,7 @@ class Syncer:
         self._save_pulled(merged)
         return 0
 
-    def _fetch_pull_state(self) -> dict:
+    def _fetch_pull_state(self, statuses: bool = False) -> dict:
         board = get_project_items(self.project, self.owner)
         nums = {
             (it.get("content") or {}).get("number")
@@ -2180,8 +2347,64 @@ class Syncer:
         priority = _pull_board_priority(board)
         details = _fetch_issue_details(self.repo, nums)
         _, edges, parents = _fetch_node_ids_and_edges(self.repo, nums)
-        issues = _assemble_pulled_issues(nums, details, priority, _invert_edges(edges))
+        board_status = _pull_board_status(board) if statuses else None
+        issues = _assemble_pulled_issues(
+            nums, details, priority, _invert_edges(edges), board_status
+        )
         return {"issues": issues, "parents": parents}
+
+    def push_status(
+        self, *, dry_run: bool = False, only: list[int] | None = None
+    ) -> int:
+        """Push ONLY the Status board field for items that already have issues.
+
+        The narrow, automation-safe write: no issue creation, no body/label
+        or sub-issue reconcile, no backlog writeback. Items without an
+        ``issue_number`` are skipped; the remote-snapshot diff drops no-op
+        updates.
+
+        Args:
+            dry_run (bool): Print the planned updates and write nothing.
+            only (list[int] | None): Limit to these issue numbers.
+
+        Returns:
+            int: 0.
+
+        SideEffect:
+            Batched ``updateProjectV2ItemFieldValue`` mutations (real run
+            only; the metadata fetch may also self-heal missing Status
+            options such as "In Review").
+
+        Example:
+            >>> Syncer(backlog_path=p).push_status(dry_run=True)  # doctest: +SKIP
+            Return: 0
+        """
+        stories, tasks, _, _ = load_flat_data(self.backlog_path)
+        targets = _status_push_targets(stories + tasks, only)
+        print(f"Push-status mode: {len(targets)} numbered item(s)")
+        if not targets:
+            print("  Nothing to push.")
+            return 0
+        project_id, field_map = self._status_field_metadata(dry_run)
+        items = get_project_items(self.project, self.owner)
+        mutations = _collect_mutations(
+            targets, items, project_id, field_map,
+            _build_remote_values_map(items), specs=_STATUS_FIELD_SPECS,
+        )
+        if dry_run:
+            print(f"\n[dry-run] Would send {len(mutations)} Status update(s).")
+            return 0
+        execute_batched_mutations(mutations)
+        return 0
+
+    def _status_field_metadata(self, dry_run: bool) -> tuple[str, dict[str, dict]]:
+        # A real run reuses the self-healing metadata fetch (creates missing
+        # fields/options); a dry run must stay read-only.
+        if dry_run:
+            project_id = get_project_id(self.project, self.owner)
+            field_map = build_field_map(get_project_fields(self.project, self.owner))
+            return project_id, field_map
+        return self._fetch_project_metadata()
 
     def _save_pulled(self, merged: dict) -> None:
         self.backlog_path.write_text(

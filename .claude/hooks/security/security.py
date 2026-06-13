@@ -143,15 +143,11 @@ def validate_security(input_data: dict | None) -> None:
         if not is_safe:
             Hook.block(error or "Unknown error")
 
-        Hook.system_message(f"ALLOWED: {tool_name}")
-
     if tool_name == "Bash":
         command = tool_input.get("command")
         is_safe, error = check_dangerous_command(command)
         if not is_safe:
             Hook.block(error or "Unknown error")
-
-        Hook.system_message(f"ALLOWED: {command}")
 
 
 def main():

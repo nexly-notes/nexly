@@ -1,6 +1,6 @@
 # NEXLY RN — Product Backlog
 
-*Ship the installable, two-mode (Write + Study) AI-assisted note-taking PWA MVP for nursing students.*
+*Ship the installable, three-mode (Create + Edit + Study) AI-assisted note-taking PWA MVP for nursing students.*
 
 - **Dates:** 2026-06-08 → 2026-07-03
 - **Stories:** 70 — P0: 60 · P1: 8 · P2: 2

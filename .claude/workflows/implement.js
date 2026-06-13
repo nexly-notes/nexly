@@ -1,39 +1,23 @@
 export const meta = {
   name: 'implement',
   description:
-    'End-to-end, parallelized implementation lifecycle for ANY task on ANY project: explore the codebase + research the latest docs, draft a DECOMPOSED plan (a DAG of independently-buildable work units), gate it on a reviewer confidence score (and a TDD decision), then build it with maximum safe parallelism — RED tests written per-unit in parallel and reviewed by multiple lenses in parallel, GREEN implemented in dependency/file-disjoint waves, an integration gate, parallel refactor — and finish with a multi-dimension final review (design, functionality, complexity, tests, naming, comments, style, documentation) plus security and requirements reviews.',
+    'Tight build pipeline for ANY task on ANY project: one intake agent reads the plan (if given) and the repo, decides TDD (follows the plan if it states a testing approach, otherwise assesses the task), then builds in file-disjoint waves — RED tests first when TDD is on — runs an integration gate, and finishes with a small adversarial review panel (correctness+tests, security, requirements) that tries to REFUTE the change. With no task/plan args, intake works from the project handoff (project/handoffs/handoff.md).',
   whenToUse:
-    'Run to take a feature or bugfix from idea to reviewed code through one gated, heavily-parallel pipeline. Pass the task as args (string, or { task, ... }). It runs in TWO steps around a single human checkpoint: the FIRST run explores, researches, drafts a decomposed plan, and gates it on a reviewer confidence score (default 80, with a revise loop) — then PAUSES and returns the plan for you to review (status "awaiting-plan-approval"); NO code is written yet. To build it, relaunch the SAME run with resumeFromRunId and args.proceed=true: the explore/plan/review phases replay from cache (no re-spend) and only the implementation runs live (RED + per-unit test review, GREEN/refactor waves, integration, final review). Pass proceed=true on the first run to skip the pause and go end-to-end. IMPORTANT: the implement phase writes to the working tree — run it on a clean branch; resume is same-session. Optional args: { task, proceed, scoreThreshold, maxPlanRevisions, maxTestRevisions, testReviewers, planReviewers, maxExplorers, maxResearchers, forceTDD, testCommand, slug, models }.',
+    'Run to build a feature or bugfix without the explore/research/plan/plan-review pipeline — bring your own plan, just a task, or nothing at all: with NO task/plan args the intake agent MUST work from the project handoff (project/handoffs/handoff.md, searching the repo if it moved), and if no handoff exists the run returns status "needs-input" so the caller can ask the user what to implement. Pass args as a string task, or { task, plan, planPath, ... }. If the plan/handoff explicitly states a testing approach (TDD required or waived) or the task size/difficulty, the workflow follows it; otherwise the intake agent assesses them from the task and the project preferences (CLAUDE.md). Every phase is capped small (intake 1, RED/build <= maxUnits [default 4, max 6], integration <= 2, review 3, report 1). The intake agent also sizes the task (xs/s/m/l/xl/xxl), which picks the developer tier: xs sonnet@high, s sonnet@max, m opus@high, l opus@xhigh, xl/xxl opus@max; reviewers run on Fable 5. IMPORTANT: writes to the working tree — run on a clean branch. Optional args: { task, plan (inline markdown), planPath (file the intake agent reads), forceTDD, taskSize (xs|s|m|l|xl|xxl, overrides intake sizing), testCommand, maxUnits, maxIntegrationFixes, slug, models }.',
   phases: [
     {
-      title: 'Scope',
+      title: 'Intake',
       detail:
-        'One explorer reads the repo + task: what to explore, what to research, the test command, the requirements',
+        'One agent reads the plan — or the project handoff when no args were given — plus the repo: work units, test command, requirements, and the TDD + size decisions (plan/handoff-stated, else assessed)',
     },
     {
-      title: 'Explore & Research',
-      detail:
-        'Parallel: codebase explorers by area + doc researchers (context7/web) per library — barrier before planning',
-    },
-    {
-      title: 'Plan',
-      detail:
-        'Planner drafts a decomposed plan: a DAG of work units with disjoint files + contracts (revised here on a low score)',
-    },
-    {
-      title: 'Plan Review',
-      detail:
-        'Reviewer panel scores confidence 0-100 and decides TDD; <threshold loops a revise, >=threshold proceeds',
-    },
-    {
-      title: 'Tests (RED) & Review',
-      detail:
-        'Parallel per unit: write failing tests; each unit reviewed by N lenses in parallel; barrier before GREEN',
+      title: 'Tests (RED)',
+      detail: 'TDD only: failing tests per unit, written in parallel',
     },
     {
       title: 'Implement',
       detail:
-        'GREEN in dependency/file-disjoint waves (parallel within a wave), or a parallel direct build when TDD is off',
+        'GREEN (minimal code + a same-agent tidy pass) or direct build, in dependency/file-disjoint waves',
     },
     {
       title: 'Integration',
@@ -41,99 +25,89 @@ export const meta = {
         'One agent runs the full suite + build to catch cross-unit regressions; bounded fix loop',
     },
     {
-      title: 'Refactor',
+      title: 'Adversarial Review',
       detail:
-        'Parallel per file-disjoint unit: clean up, keep tests green, no behavior change (TDD only)',
-    },
-    {
-      title: 'Final Review',
-      detail:
-        'Parallel: design+complexity, functionality, tests, naming+comments+style+docs, security, requirements',
+        'Three reviewers try to REFUTE the change: correctness+design+tests, security, requirements (with file:line evidence)',
     },
     {
       title: 'Report',
-      detail:
-        'Consolidate plan, scores, TDD decision, parallelism, and all findings into a report under .claude/plans/',
+      detail: 'Consolidate the run into a report under .claude/plans/',
     },
   ],
 };
 
 // ---------------------------------------------------------------------------
-// DESIGN NOTES / JUDGMENT CALLS (per the request to not blindly follow project
-// skills/commands/agents):
+// DESIGN NOTES
 //
-// - PORTABILITY OVER REUSE. Every behavioral instruction below is SELF-CONTAINED
-//   in the prompts. The workflow does NOT depend on this repo's /plan, /tdd,
-//   /code-review skills or their templates/hooks existing — so it runs unchanged
-//   on any project. The prompts (not the agents' built-in assumptions) govern
-//   output, and project files are referenced only as "if present".
+// - NO EXPLORE / NO PLANNING. This workflow starts from a task (and optionally
+//   an existing plan via args.plan or args.planPath). The single Intake agent
+//   grounds itself in the repo, extracts work units from the plan when one is
+//   provided, and derives a minimal decomposition otherwise. There is no plan
+//   drafting, no plan-review gate, and no human checkpoint.
 //
-// - COMPANION AGENTS (tool-scoped, since we no longer rely on hooks). Each phase
-//   runs a purpose-built subagent whose `.claude/agents/*.md` `tools:` allowlist
-//   is the ONLY tool restriction. Read-only roles physically cannot write:
-//     Scope/Explore -> Explore · Research -> Researcher · Plan -> Plan
-//     Plan review -> Plan Reviewer · Test review + tests dim -> Test Reviewer
-//     Design/Functionality/Readability dims -> Code Reviewer · Security -> Security Auditor
-//     Requirements -> QA Specialist
-//   Write-capable roles are scoped to exactly what they need (no web/MCP):
-//     RED/test-revise -> Test Author · GREEN/build/refactor -> Frontend|Backend
-//     Developer (routed by unit.domain via devFor) · Integration -> Debugger
-//     Report -> Report Writer (no Bash).
-//   These agents must ship alongside this workflow; on a project that lacks them,
-//   swap the agentType back to 'general-purpose' (it has all tools).
-//   NOTE: a `tools:` allowlist is tool-granular, not path-granular — it cannot stop
-//   a writer from editing the wrong file. Per-unit file isolation is upheld by the
-//   disjoint-file wave scheduler + the prompts + running on a clean branch.
+// - HANDOFF FALLBACK. With NO task and NO plan args, the Intake agent must
+//   work from the project handoff — project/handoffs/handoff.md first, then a
+//   repo-wide search. A found handoff IS the task + plan; a handoff-stated
+//   size/difficulty or TDD directive is followed (explicit args still
+//   override). If no handoff exists, the run returns { status: 'needs-input' }
+//   so the caller asks the user what to implement — it never invents a task.
 //
-// - PARALLELISM MODEL. Speed comes from a decomposed plan. The planner emits a
-//   DAG of work units, each declaring the files it owns + a public contract.
-//   * RED + per-unit test review run as a pipeline (each unit flows
-//     independently; no inter-stage barrier within the phase).
-//   * Test review is "bumped": each unit's tests are judged by N lenses in
-//     parallel (correctness / coverage / anti-patterns), configurable.
-//   * A barrier after RED+review enforces "all tests reviewed before GREEN".
-//   * GREEN runs in WAVES: within a wave, units are dependency-ready AND
-//     file-disjoint, so concurrent agents never edit the same file. Waves are
-//     scheduled by scheduleWaves() below.
-//   * Refactor reuses those file-disjoint waves; final review fans out per
-//     dimension. Explore/research fan out per scope target.
+// - TDD DECISION. If the plan explicitly states a testing approach (TDD
+//   required, or explicitly waived), the workflow FOLLOWS the plan. If the plan
+//   is silent (or absent), the Intake agent assesses whether TDD fits this task
+//   and the project's stated preferences (e.g. CLAUDE.md "Prefer TDD").
+//   args.forceTDD overrides everything.
 //
-// - HUMAN CHECKPOINT (the only one). The first run stops after the plan is
-//   reviewed/approved and returns it (status 'awaiting-plan-approval') — nothing
-//   is written. Resume the SAME run with args.proceed=true to build; the
-//   explore/plan/review prefix replays from cache (no re-spend), only the
-//   implement phases run live. The proceed flag gates the branch BELOW the plan,
-//   so it never alters an upstream prompt and the cache stays intact.
-//   Same-session only; pass proceed=true on the first run to skip the pause.
+// - TIGHT PHASES. Every phase is capped: Intake 1 agent; RED and Implement at
+//   most maxUnits agents (default 4, clamped to 6); Integration 1 + at most
+//   maxIntegrationFixes (default 1); Adversarial Review exactly 3; Report 1.
+//
+// - DEVELOPER TIERING. Intake resolves the task size — a plan/handoff-stated
+//   size/difficulty is followed, otherwise intake assesses it; args.taskSize
+//   overrides both. The size picks the developer model + reasoning effort:
+//     xs -> sonnet @ high · s -> sonnet @ max · m -> opus @ high
+//     l -> opus @ xhigh · xl/xxl -> opus @ max
+//   agent() has no effort parameter, so effort rides in the build prompts via
+//   the harness thinking keywords (think hard / think harder / ultrathink).
+//
+// - ADVERSARIAL REVIEW. Reviewers are skeptics, not checklist-fillers: each is
+//   prompted to actively try to refute that the change is correct/secure/
+//   complete, and a finding must carry evidence (file:line, a failing command,
+//   or a concrete exploit path) to count. All three lenses run on Fable 5
+//   (model: 'fable') — the strongest tier is reserved for the review gate.
+//
+// - AGENT TYPES. Only agents that exist in this registry are used:
+//   read-only review/intake -> Explore (has Bash, cannot Write/Edit)
+//   security review -> security-auditor
+//   write-capable build/integration/report -> general-purpose
+//
+// - PARALLELISM. Units declare the files they own; scheduleWaves() runs
+//   dependency-ready, file-disjoint units concurrently and serializes the rest,
+//   so concurrent agents never edit the same file.
 // ---------------------------------------------------------------------------
 
 const input = typeof args === 'string' ? { task: args } : args || {};
-const task = (input.task || input.feature || input.instruction || '').trim();
-if (!task) {
-  throw new Error(
-    'implement requires a task. Pass args as a string, or as { task: "..." }.',
-  );
-}
+let task = (input.task || input.feature || input.instruction || '').trim();
+const planInline = (input.plan || '').trim();
+const planPath = (input.planPath || '').trim();
+// No task and no plan → handoff mode: intake must find and build from the
+// project handoff (project/handoffs/handoff.md, searched if moved); with no
+// handoff found the run stops so the user can be asked what to implement.
+const handoffMode = !task && !planInline && !planPath;
 
 const num = (v, d) => (Number.isFinite(v) ? v : d);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 const CFG = {
-  threshold: num(input.scoreThreshold, 80),
-  maxPlanRevisions: num(input.maxPlanRevisions, 3),
-  maxTestRevisions: num(input.maxTestRevisions, 2),
-  maxIntegrationFixes: num(input.maxIntegrationFixes, 1),
-  maxExplorers: clamp(num(input.maxExplorers, 5), 1, 8),
-  maxResearchers: clamp(num(input.maxResearchers, 4), 0, 6),
-  // how many test-review lenses per unit (the "bumped" reviewer count)
-  testReviewers: clamp(num(input.testReviewers, 2), 1, 3),
-  // plan-review panel size (distinct lenses); 1 = single holistic reviewer
-  planReviewers: clamp(num(input.planReviewers, 1), 1, 3),
+  maxUnits: clamp(num(input.maxUnits, 4), 1, 6),
+  maxIntegrationFixes: clamp(num(input.maxIntegrationFixes, 1), 0, 2),
   forceTDD: typeof input.forceTDD === 'boolean' ? input.forceTDD : undefined,
   testCommand: (input.testCommand || '').trim(),
 };
-const slug =
-  (input.slug || task)
+// In handoff mode the task is only known after intake, so the report slug is
+// resolved post-intake via slugify().
+const slugify = (s) =>
+  (s || '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
@@ -141,48 +115,48 @@ const slug =
     .slice(0, 6)
     .join('-') || 'task';
 
-// Per-agent model tiers — minimize cost by reserving Opus for the high-leverage
-// reasoning gates (plan, plan review, the deep final-review lenses), running the
-// coding + most reviews on Sonnet, and pushing cheap/mechanical work (doc
-// research, refactor, report) to Haiku. Override any key via args.models, e.g.
-// { models: { developer: 'opus', refactor: 'sonnet' } }. Values: 'opus'|'sonnet'|'haiku'.
+// Per-agent model tiers — Fable for the adversarial review panel, Sonnet for
+// intake/tests/integration, Haiku for the report. The DEVELOPER model + effort
+// are picked from the task size after intake (see DEV_TIERS); args.models
+// can override any role, e.g. { models: { developer: 'opus' } }.
+// Values: 'fable'|'opus'|'sonnet'|'haiku'.
 const MODELS = {
-  scope: 'sonnet',
-  explore: 'sonnet',
-  research: 'haiku',
-  plan: 'opus',
-  planReview: 'opus',
-  testAuthor: 'sonnet', // Test Author — RED + test-revise
-  testReview: 'sonnet', // Test Reviewer — pre-GREEN test review
-  developer: 'sonnet', // Frontend/Backend Developer — GREEN + direct build
-  integration: 'sonnet', // Debugger — integration fix loop
-  refactor: 'haiku', // Frontend/Backend Developer — refactor pass
-  review_design: 'opus',
-  review_functionality: 'opus',
-  review_tests: 'sonnet',
-  review_readability: 'sonnet',
-  review_security: 'opus',
-  review_requirements: 'sonnet',
-  report: 'haiku', // Report Writer
+  intake: 'sonnet',
+  testAuthor: 'sonnet',
+  integration: 'sonnet',
+  review_correctness: 'fable',
+  review_security: 'fable',
+  review_requirements: 'fable',
+  report: 'haiku',
   ...(input.models || {}),
 };
 
-// Route a work unit to the right domain developer. Frontend = client/UI/browser;
-// everything else (incl. non-web projects) goes to the Backend Developer.
-const devFor = (u) =>
-  u && u.domain === 'frontend' ? 'Frontend Developer' : 'Backend Developer';
+// Developer tier by task size: Opus for medium and up, Sonnet for small/xs,
+// with reasoning effort scaled to the size. agent() has no effort parameter,
+// so effort is conveyed in-prompt via the harness thinking keywords
+// (think hard < think harder < ultrathink).
+const SIZES = ['xs', 's', 'm', 'l', 'xl', 'xxl'];
+const DEV_TIERS = {
+  xs: { model: 'sonnet', effort: 'high' },
+  s: { model: 'sonnet', effort: 'max' },
+  m: { model: 'opus', effort: 'high' },
+  l: { model: 'opus', effort: 'xhigh' },
+  xl: { model: 'opus', effort: 'max' },
+  xxl: { model: 'opus', effort: 'max' },
+};
+const EFFORT_LINES = {
+  high: 'EFFORT: HIGH. Think hard before you code — trace the affected paths and edge cases, then implement.',
+  xhigh:
+    'EFFORT: EXTRA HIGH. Think harder before you code — reason through the design, failure modes, and edge cases end-to-end first.',
+  max: 'EFFORT: MAXIMUM. Ultrathink before you code — exhaustively reason through the design, alternatives, failure modes, and edge cases first.',
+};
 
 const dedupe = (a) => Array.from(new Set((a || []).filter(Boolean)));
 const clip = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : s || '');
-const sanitize = (s) =>
-  (s || '')
-    .toString()
-    .replace(/[^a-zA-Z0-9_-]+/g, '-')
-    .slice(0, 28);
 
 // ---------------------------------------------------------------------------
 // Wave scheduler: order units by their dependency DAG; within a wave keep them
-// file-disjoint so parallel GREEN agents never touch the same file. Units with
+// file-disjoint so parallel build agents never touch the same file. Units with
 // no declared files (unknown footprint) are treated as conflicting with all and
 // run alone. Dependency cycles degrade gracefully to a serial tail.
 // ---------------------------------------------------------------------------
@@ -231,88 +205,31 @@ function scheduleWaves(units) {
 }
 
 // ---------------------------------------------------------------------------
-// Review lenses
+// Adversarial review panel — exactly three lenses, each tasked with REFUTING
+// the change rather than approving it.
 // ---------------------------------------------------------------------------
-
-const TEST_LENSES = [
-  {
-    key: 'correctness',
-    focus:
-      'CORRECTNESS & BEHAVIOR — assertions encode the intended behavior (not inverted, not tautological); tests exercise REAL behavior, not mock interactions or private internals; failure messages are diagnosable.',
-  },
-  {
-    key: 'coverage',
-    focus:
-      'COVERAGE & EDGE CASES — every behavior/acceptance-criterion for this unit is covered, including negative paths, boundaries, and empty/single/large/malformed inputs. List anything missing.',
-  },
-  {
-    key: 'anti-patterns',
-    focus:
-      'ANTI-PATTERNS & RELIABILITY — over-mocking that hides real behavior, time/order dependence, shared mutable state, hidden coupling, flakiness, asserting on incidental output, or test-only hooks leaking into production.',
-  },
-];
-const PLAN_LENSES = [
-  {
-    key: 'overall',
-    focus:
-      'HOLISTIC quality across completeness, clarity, feasibility, risk management, and alignment with the task + requirements.',
-  },
-  {
-    key: 'requirements',
-    focus:
-      'REQUIREMENTS ALIGNMENT — trace EVERY requirement/acceptance criterion to a concrete step/unit; flag any that is unaddressed or only implied.',
-  },
-  {
-    key: 'decomposition',
-    focus:
-      'DECOMPOSITION & PARALLEL-SAFETY — are work units well-bounded with DISJOINT files and a correct depends_on DAG (no cycles)? Are the declared contracts sufficient to build units independently? Flag units that secretly share files or hide an ordering dependency.',
-  },
-];
-const testLenses = TEST_LENSES.slice(0, CFG.testReviewers);
-const planLenses = PLAN_LENSES.slice(0, CFG.planReviewers);
 
 const REVIEW_DIMENSIONS = [
   {
-    key: 'design',
-    agent: 'Code Reviewer',
-    model: MODELS.review_design,
+    key: 'correctness',
+    agent: 'Explore',
+    model: MODELS.review_correctness,
     covers:
-      'DESIGN & COMPLEXITY — module boundaries, separation of concerns, soundness of the design decisions, and complexity: over/under-engineering, premature abstraction, dead code, KISS/YAGNI/DRY (and their over-application).',
-  },
-  {
-    key: 'functionality',
-    agent: 'Code Reviewer',
-    model: MODELS.review_functionality,
-    covers:
-      'FUNCTIONALITY & RELIABILITY — does the code do what the plan/requirements demand? Logic correctness (off-by-one, null/undefined, races, wrong types, error propagation), and edge cases (empty/single/large/malformed input, boundary values, failure modes, idempotency).',
-  },
-  {
-    key: 'tests',
-    agent: 'Test Reviewer',
-    model: MODELS.review_tests,
-    covers:
-      'TESTS — new behavior has tests (unit/integration/e2e as fit); assertions actually verify behavior; negative & edge cases present; isolation is correct; no anti-patterns (testing mocks not behavior, tautologies, time/order-dependence, over-mocking); failures are diagnosable.',
-  },
-  {
-    key: 'readability',
-    agent: 'Code Reviewer',
-    model: MODELS.review_readability,
-    covers:
-      'NAMING, COMMENTS, STYLE & DOCUMENTATION — names communicate intent; comments explain WHY not WHAT and none are stale/redundant; conformance to the project STYLE GUIDE / conventions / linter (consult CLAUDE.md and .claude/rules/ if present); documentation (docstrings, README, doc rules) is present and accurate.',
+      'CORRECTNESS, DESIGN & TESTS — try to prove the change does NOT work: logic errors (off-by-one, null/undefined, races, wrong types, error propagation), unhandled edge cases (empty/single/large/malformed input, boundaries, failure modes), design flaws (broken boundaries, over/under-engineering, dead code), and weak tests (tautological assertions, over-mocking, behaviors with no test, tests that would still pass if the feature were broken). RUN the tests as part of your attack.',
   },
   {
     key: 'security',
-    agent: 'Security Auditor',
+    agent: 'security-auditor',
     model: MODELS.review_security,
     covers:
-      'SECURITY — injection (SQL/command/template/header/XSS), authn/authz flaws & IDOR/privilege escalation, secret & PII exposure (logs, errors), input validation & output encoding, CSRF, insecure/vulnerable dependencies, and cryptography (correct primitives, key handling, secure randomness, TLS).',
+      'SECURITY — attack the change: injection (SQL/command/template/header/XSS), authn/authz flaws & IDOR/privilege escalation, secret & PII exposure (logs, errors), missing input validation/output encoding, CSRF, insecure or vulnerable dependencies, and cryptography misuse. A finding must name a concrete exploit path.',
   },
   {
     key: 'requirements',
-    agent: 'QA Specialist',
+    agent: 'Explore',
     model: MODELS.review_requirements,
     covers:
-      'REQUIREMENTS — verify EVERY acceptance criterion / requirement is satisfied by the implementation, each with file:line evidence. Flag any unmet/partial criterion in unmet_requirements. RUN the tests; zero tolerance for failures.',
+      'REQUIREMENTS — try to prove a requirement is NOT met. Check EVERY acceptance criterion against the implementation and demand file:line evidence that it is satisfied; anything you cannot evidence goes in unmet_requirements. RUN the test suite; zero tolerance for failures.',
   },
 ];
 
@@ -320,107 +237,74 @@ const REVIEW_DIMENSIONS = [
 // Schemas
 // ---------------------------------------------------------------------------
 
-const SCOPE_SCHEMA = {
+const INTAKE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: [
     'restated_task',
-    'stack',
+    'task_source',
+    'handoff_path',
     'test_command',
-    'explore_targets',
-    'research_topics',
     'requirements',
+    'plan_found',
+    'plan_tdd_directive',
+    'use_tdd',
+    'tdd_rationale',
+    'plan_size_directive',
+    'task_size',
+    'work_units',
+    'integration_check',
     'open_questions',
   ],
   properties: {
     restated_task: { type: 'string' },
-    stack: {
+    task_source: {
       type: 'string',
-      description: 'Languages/frameworks/tools in play, detected from the repo',
+      enum: ['args', 'handoff', 'none'],
+      description:
+        '"args" if the caller supplied the task, "handoff" if it was derived from a handoff file, "none" if no task was given and no handoff could be found',
+    },
+    handoff_path: {
+      type: 'string',
+      description:
+        'Repo-relative path of the handoff file the task was derived from; empty if none',
     },
     test_command: {
       type: 'string',
       description:
-        'Best-guess command to run the test suite (e.g. `npm test`, `pytest`). Empty if none exists.',
-    },
-    explore_targets: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['area', 'why'],
-        properties: { area: { type: 'string' }, why: { type: 'string' } },
-      },
-    },
-    research_topics: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['library', 'focus'],
-        properties: { library: { type: 'string' }, focus: { type: 'string' } },
-      },
+        'Command that runs this repo test suite (e.g. `npm test`, `pytest`). Empty if none exists.',
     },
     requirements: {
       type: 'array',
       items: { type: 'string' },
       description:
-        'Concrete, testable acceptance criteria distilled from the task + specs',
+        'Concrete, testable acceptance criteria distilled from the plan/task/specs — these gate the requirements review',
     },
-    open_questions: { type: 'array', items: { type: 'string' } },
-  },
-};
-
-// Improved, decomposition-first plan schema. The work_units DAG is the engine
-// that drives parallel RED/GREEN; the rest gives reviewers + implementers the
-// context they need without guessing.
-const PLAN_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: [
-    'objective',
-    'in_scope',
-    'out_of_scope',
-    'approach',
-    'interfaces',
-    'data_model_changes',
-    'work_units',
-    'test_strategy',
-    'integration_check',
-    'risks',
-    'rollback',
-    'acceptance_criteria',
-    'open_questions',
-    'plan_markdown',
-  ],
-  properties: {
-    objective: {
+    plan_found: { type: 'boolean' },
+    plan_tdd_directive: {
       type: 'string',
-      description: 'One or two sentences: what this change accomplishes',
+      enum: ['tdd', 'no-tdd', 'silent'],
+      description:
+        '"tdd" if the plan explicitly directs test-driven development, "no-tdd" if it explicitly waives it, "silent" if the plan says nothing (or no plan was provided)',
     },
-    in_scope: { type: 'array', items: { type: 'string' } },
-    out_of_scope: { type: 'array', items: { type: 'string' } },
-    approach: {
+    use_tdd: {
+      type: 'boolean',
+      description:
+        'The final TDD decision: follow the plan directive when not silent; otherwise your assessment of the task + project preferences',
+    },
+    tdd_rationale: { type: 'string' },
+    plan_size_directive: {
       type: 'string',
+      enum: ['xs', 's', 'm', 'l', 'xl', 'xxl', 'silent'],
       description:
-        'The concrete technical approach, grounded in the real modules/APIs found during exploration/research',
+        'The size/difficulty the plan/handoff EXPLICITLY states (map wording — trivial→xs, small→s, medium→m, large→l, very large/architecturally risky→xl, sweeping→xxl); "silent" if it states none (or no plan/handoff was provided)',
     },
-    interfaces: {
-      type: 'array',
+    task_size: {
+      type: 'string',
+      enum: ['xs', 's', 'm', 'l', 'xl', 'xxl'],
       description:
-        'Public contracts (functions/types/endpoints/schemas) introduced or changed — the boundaries units agree on so they can be built independently',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['name', 'signature', 'description'],
-        properties: {
-          name: { type: 'string' },
-          signature: { type: 'string' },
-          description: { type: 'string' },
-        },
-      },
+        'The FINAL size decision: follow plan_size_directive when not silent; otherwise your own assessment of the overall complexity. xs = trivial tweak (one spot, no design), s = small single-file/unit change, m = multi-file feature with some design, l = large feature spanning modules, xl = very large or architecturally risky, xxl = sweeping cross-cutting change',
     },
-    data_model_changes: { type: 'array', items: { type: 'string' } },
     work_units: {
       type: 'array',
       description:
@@ -431,7 +315,6 @@ const PLAN_SCHEMA = {
         required: [
           'id',
           'name',
-          'domain',
           'description',
           'files',
           'test_files',
@@ -442,18 +325,12 @@ const PLAN_SCHEMA = {
         properties: {
           id: { type: 'string', description: 'Stable short id, e.g. "U1"' },
           name: { type: 'string' },
-          domain: {
-            type: 'string',
-            enum: ['frontend', 'backend'],
-            description:
-              'frontend = client/UI/browser work; backend = everything else (services, data, logic, libraries, CLI, infra). Non-web projects: always backend.',
-          },
           description: { type: 'string' },
           files: {
             type: 'array',
             items: { type: 'string' },
             description:
-              'Repo-relative production files THIS unit creates/modifies. Must be disjoint from other units to enable parallel builds.',
+              'Repo-relative production files THIS unit creates/modifies. Disjoint from other units to enable parallel builds.',
           },
           test_files: {
             type: 'array',
@@ -463,122 +340,28 @@ const PLAN_SCHEMA = {
           public_contract: {
             type: 'string',
             description:
-              'The interface other units depend on (so they can be built against it without seeing the implementation)',
+              'The interface other units depend on, so they can be built against it without seeing the implementation',
           },
           behaviors: {
             type: 'array',
             items: { type: 'string' },
             description:
-              'Testable behaviors this unit must exhibit — these drive its RED tests',
+              'Testable behaviors this unit must exhibit — these drive its tests',
           },
           depends_on: {
             type: 'array',
             items: { type: 'string' },
-            description:
-              'ids of units that must be implemented before this one',
+            description: 'ids of units that must be implemented first',
           },
         },
       },
-    },
-    test_strategy: {
-      type: 'string',
-      description:
-        'Levels (unit/integration/e2e), frameworks, and what the key tests assert',
     },
     integration_check: {
       type: 'string',
       description:
         'The command(s) that validate the whole change together (full test suite + build/lint)',
     },
-    risks: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['risk', 'impact', 'likelihood', 'mitigation'],
-        properties: {
-          risk: { type: 'string' },
-          impact: { type: 'string', enum: ['low', 'medium', 'high'] },
-          likelihood: { type: 'string', enum: ['low', 'medium', 'high'] },
-          mitigation: { type: 'string' },
-        },
-      },
-    },
-    rollback: {
-      type: 'string',
-      description: 'How to back the change out if it goes wrong',
-    },
-    acceptance_criteria: { type: 'array', items: { type: 'string' } },
     open_questions: { type: 'array', items: { type: 'string' } },
-    plan_markdown: {
-      type: 'string',
-      description: 'Human-readable rendering of the whole plan for the report',
-    },
-  },
-};
-
-const PLAN_REVIEW_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: [
-    'confidence_score',
-    'quality_score',
-    'dimension_scores',
-    'tdd_required',
-    'tdd_rationale',
-    'verdict',
-    'strengths',
-    'weaknesses',
-    'required_changes',
-    'parallelization_risks',
-  ],
-  properties: {
-    confidence_score: {
-      type: 'integer',
-      minimum: 0,
-      maximum: 100,
-      description:
-        'Confidence the plan, as written, will succeed. THIS is the gate.',
-    },
-    quality_score: { type: 'integer', minimum: 0, maximum: 100 },
-    dimension_scores: {
-      type: 'object',
-      additionalProperties: false,
-      required: [
-        'completeness',
-        'clarity',
-        'feasibility',
-        'risk_management',
-        'alignment',
-        'decomposition',
-      ],
-      properties: {
-        completeness: { type: 'integer', minimum: 0, maximum: 100 },
-        clarity: { type: 'integer', minimum: 0, maximum: 100 },
-        feasibility: { type: 'integer', minimum: 0, maximum: 100 },
-        risk_management: { type: 'integer', minimum: 0, maximum: 100 },
-        alignment: { type: 'integer', minimum: 0, maximum: 100 },
-        decomposition: {
-          type: 'integer',
-          minimum: 0,
-          maximum: 100,
-          description:
-            'Quality of the work-unit DAG: bounded units, disjoint files, correct deps, sufficient contracts',
-        },
-      },
-    },
-    tdd_required: { type: 'boolean' },
-    tdd_rationale: { type: 'string' },
-    verdict: { type: 'string', enum: ['approve', 'revise'] },
-    strengths: { type: 'array', items: { type: 'string' } },
-    weaknesses: { type: 'array', items: { type: 'string' } },
-    required_changes: { type: 'array', items: { type: 'string' } },
-    parallelization_risks: {
-      type: 'array',
-      items: { type: 'string' },
-      description:
-        'Units that secretly share files, hidden ordering deps, or contracts too thin to build against in parallel',
-    },
   },
 };
 
@@ -621,44 +404,7 @@ const RED_SCHEMA = {
   },
 };
 
-const TEST_REVIEW_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: [
-    'lens',
-    'verdict',
-    'confidence_score',
-    'findings',
-    'missing_cases',
-    'summary',
-  ],
-  properties: {
-    lens: { type: 'string' },
-    verdict: { type: 'string', enum: ['approve', 'revise'] },
-    confidence_score: { type: 'integer', minimum: 0, maximum: 100 },
-    findings: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['severity', 'file', 'issue', 'fix'],
-        properties: {
-          severity: {
-            type: 'string',
-            enum: ['critical', 'high', 'medium', 'low'],
-          },
-          file: { type: 'string' },
-          issue: { type: 'string' },
-          fix: { type: 'string' },
-        },
-      },
-    },
-    missing_cases: { type: 'array', items: { type: 'string' } },
-    summary: { type: 'string' },
-  },
-};
-
-const GREEN_SCHEMA = {
+const BUILD_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   required: [
@@ -678,49 +424,8 @@ const GREEN_SCHEMA = {
     test_output: { type: 'string' },
     modified_tests: {
       type: 'boolean',
-      description: 'MUST be false — tests are frozen during GREEN',
+      description: 'MUST be false under TDD — tests are frozen during GREEN',
     },
-    notes: { type: 'string' },
-  },
-};
-
-const REFACTOR_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: [
-    'unit_id',
-    'files_touched',
-    'tests_still_green',
-    'changes_summary',
-  ],
-  properties: {
-    unit_id: { type: 'string' },
-    files_touched: { type: 'array', items: { type: 'string' } },
-    tests_still_green: { type: 'boolean' },
-    changes_summary: {
-      type: 'string',
-      description: 'What was cleaned up; NO behavior added',
-    },
-  },
-};
-
-const IMPLEMENT_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: [
-    'unit_id',
-    'files_touched',
-    'ran_command',
-    'validation_passed',
-    'validation_output',
-    'notes',
-  ],
-  properties: {
-    unit_id: { type: 'string' },
-    files_touched: { type: 'array', items: { type: 'string' } },
-    ran_command: { type: 'string' },
-    validation_passed: { type: 'boolean' },
-    validation_output: { type: 'string' },
     notes: { type: 'string' },
   },
 };
@@ -759,7 +464,7 @@ const DIMENSION_REVIEW_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['severity', 'location', 'issue', 'fix'],
+        required: ['severity', 'location', 'issue', 'evidence', 'fix'],
         properties: {
           severity: {
             type: 'string',
@@ -767,6 +472,11 @@ const DIMENSION_REVIEW_SCHEMA = {
           },
           location: { type: 'string' },
           issue: { type: 'string' },
+          evidence: {
+            type: 'string',
+            description:
+              'The proof: file:line, failing command output, or a concrete exploit path. No evidence, no finding.',
+          },
           fix: { type: 'string' },
         },
       },
@@ -792,205 +502,51 @@ const REPORT_SCHEMA = {
 // Prompt builders
 // ---------------------------------------------------------------------------
 
-function scopePrompt() {
-  return `You are a tech lead scoping a piece of work before a team plans and builds it. Read the repository to ground every claim — do not guess.
+function planBlock() {
+  if (planInline)
+    return `PLAN (provided by the caller — this is the plan to build):\n"""\n${planInline}\n"""`;
+  if (planPath)
+    return `PLAN FILE: \`${planPath}\` — READ this file; it is the plan to build. If it does not exist, say so in open_questions and work from the task alone.`;
+  if (handoffMode)
+    return `PLAN: the caller provided NO task and NO plan — you MUST work from the project handoff.
+1. Read \`project/handoffs/handoff.md\` (the usual location).
+2. If it is not there, SEARCH the repo for one (e.g. glob \`**/handoff*.md\`, prefer the most recently modified) before giving up.
+3. If a handoff is found: it IS the task and the plan. Set task_source="handoff" and handoff_path to its repo-relative path, derive restated_task, requirements, and work_units from it, and honor any testing approach or size/difficulty it states (see the TDD and SIZE decisions below).
+4. If NO handoff exists anywhere: set task_source="none", handoff_path="", leave work_units empty, and return immediately — the user must be ASKED what to implement first. Do NOT invent a task.`;
+  return 'PLAN: none provided — work from the task and the repository alone.';
+}
+
+function intakePrompt() {
+  return `You are a tech lead doing INTAKE for a build that starts immediately — there is no separate planning phase after you. Ground every claim in the repository; do not guess.
 
 TASK:
-"""
-${task}
-"""
+${task ? `"""\n${task}\n"""` : '(none provided — derive it from the handoff per the PLAN instructions below, and restate it in restated_task)'}
 
-Produce a precise scope:
-1. restated_task — restate the task sharply in one or two sentences.
-2. stack — the languages, frameworks, and tooling actually in this repo that the work touches (detect from package.json / pyproject / config files / source).
-3. test_command — the command that runs this repo's test suite (e.g. \`npm test\`, \`npx vitest run\`, \`pytest\`). ${CFG.testCommand ? `The caller supplied "${CFG.testCommand}" — verify it fits and use it.` : 'Infer it from the repo; empty string if there is no test setup.'}
-4. explore_targets — up to ${CFG.maxExplorers} areas of THIS codebase a developer must read before changing it (modules/dirs the task touches, conventions to match, tests to mirror). Each { area, why }. No overlap between areas.
-5. research_topics — up to ${CFG.maxResearchers} external libraries/frameworks/APIs whose LATEST documentation should be fetched to build this correctly. Each { library, focus }. Omit if the work needs no external docs.
-6. requirements — the concrete, TESTABLE acceptance criteria this work must satisfy. Trace to the task and to any spec the repo defines (e.g. CLAUDE.md, project/specs/**). These gate the requirements review.
-7. open_questions — genuine ambiguities; do not paper over them.
+${planBlock()}
 
-Return the structured scope.`;
-}
+Produce the build brief:
+1. restated_task — restate the task sharply in one or two sentences. Set task_source ("args"/"handoff"/"none") and handoff_path to match where the task came from.
+2. test_command — the command that runs this repo's test suite. ${CFG.testCommand ? `The caller supplied "${CFG.testCommand}" — verify it fits and use it.` : 'Infer it from the repo; empty string if there is no test setup.'}
+3. requirements — the concrete, TESTABLE acceptance criteria this work must satisfy. Trace to the plan, the task, and any spec the repo defines (e.g. CLAUDE.md, project/specs/**).
+4. THE TDD DECISION:
+   - If the plan EXPLICITLY directs test-driven development (or explicitly says to skip tests-first), set plan_tdd_directive to "tdd"/"no-tdd" and FOLLOW it: use_tdd matches the directive.
+   - If the plan is silent or absent, set plan_tdd_directive="silent" and ASSESS it yourself: require TDD for new features, bug fixes, behavior changes, and non-trivial testable logic; skip it for pure config/scaffolding/generated/throwaway code. Honor the project's stated preferences (read CLAUDE.md — if it prefers TDD, lean strongly toward it).
+   - Explain the decision in tdd_rationale.
+5. THE SIZE DECISION:
+   - If the plan/handoff EXPLICITLY states the task's size or difficulty (e.g. "Difficulty: Large (size \`l\`)"), set plan_size_directive to it and FOLLOW it: task_size matches the directive.
+   - If it is silent or absent, set plan_size_directive="silent" and ASSESS task_size (xs/s/m/l/xl/xxl) yourself from the real footprint of the change: files and modules touched, design judgment required, and risk.
+   - This picks the build model, so classify honestly — neither inflate nor downplay.
+6. work_units — AT MOST ${CFG.maxUnits} independently-buildable units forming a DAG (merge rather than drop work to stay under the cap; one unit is fine for small tasks). If the plan already breaks the work down, extract its units faithfully. Each unit OWNS disjoint production files, has a public_contract others build against, testable behaviors, its own test_files, and depends_on listing ONLY real ordering constraints (false dependencies kill parallelism; the graph must be acyclic).
+7. integration_check — the command(s) that validate the whole change together (full suite + build/lint).
+8. open_questions — genuine ambiguities; do not paper over them.
 
-function explorePrompt(target) {
-  return `You are exploring an existing codebase to prepare a precise, decomposed implementation plan. Do NOT propose a design — report what EXISTS.
-
-OVERALL TASK:
-"""
-${task}
-"""
-
-YOUR AREA: ${target.area}
-WHY IT MATTERS: ${target.why}
-
-Read the relevant files and report, with concrete \`path:line\` references:
-- The key modules/functions/types in this area and how they fit together.
-- The conventions and patterns new code must match (naming, structure, error handling, state, styling).
-- The existing tests covering this area and how they are written (framework, helpers, fixtures) — so new tests can mirror them.
-- Natural SEAMS for decomposition: where could the work be split into independent units that touch DISJOINT files?
-- Integration points/constraints the change must respect, and any gotcha a naive implementation would hit.
-
-Be specific and cite files. Your report feeds the planner; it is not shown to the user directly.`;
-}
-
-function researchPrompt(topic) {
-  return `You are fetching the LATEST documentation to ground an implementation. Use Context7 first (resolve the library id, then query docs); supplement with web search only if needed.
-
-OVERALL TASK:
-"""
-${task}
-"""
-
-LIBRARY / API: ${topic.library}
-FOCUS: ${topic.focus}
-
-Report:
-- The current, version-correct API surface for this task (signatures, options, required setup).
-- Idiomatic, working code patterns from the official docs for exactly this use case.
-- Version caveats, deprecations, migration notes — flag mismatches with the version installed in this repo (check package.json / lockfile).
-- Pitfalls the docs call out.
-
-Keep it tight and actionable. Your findings feed the planner.`;
-}
-
-function findingsBlock(exploreFindings, researchFindings) {
-  const ex =
-    exploreFindings
-      .map((f) => `### Codebase — ${f.area}\n${f.text}`)
-      .join('\n\n') || '(no codebase findings)';
-  const rs =
-    researchFindings
-      .map((f) => `### Docs — ${f.topic}\n${f.text}`)
-      .join('\n\n') || '(no external research)';
-  return `CODEBASE EXPLORATION:\n${ex}\n\nDOCUMENTATION RESEARCH:\n${rs}`;
-}
-
-function decompositionRules() {
-  return `DECOMPOSE the work into independently-buildable work_units forming a DAG — this is what lets the team build in parallel:
-- Each unit OWNS a set of production files. Keep file sets DISJOINT across units that could run at the same time; two units that must edit the same file should be merged or chained with depends_on (the scheduler runs file-disjoint, dependency-ready units concurrently and serializes the rest).
-- Give each unit a public_contract (the interface others rely on) so a unit can be built against another's contract without seeing its implementation.
-- List depends_on ONLY for real ordering constraints (a unit needs another's code to exist first). Avoid false dependencies — they kill parallelism. The graph must be acyclic.
-- Each unit lists testable behaviors (drive its tests) and its own test_files (disjoint from other units').
-- Classify each unit's domain: "frontend" (client/UI/browser — components, view state, styling, navigation, accessibility) or "backend" (everything else — services, APIs, data, logic, libraries, CLI, infra). On a non-web project, every unit is "backend".
-- Prefer several small, sharply-bounded units over one big unit — but do not invent scope to create units.`;
-}
-
-function planPrompt(scope, exploreFindings, researchFindings) {
-  return `You are a senior engineer writing a concrete, DECOMPOSED implementation plan. A reviewer will score it and a team will build the units in PARALLEL, so boundaries must be clean and grounded in the findings below — not generic.
-
-TASK:
-"""
-${task}
-"""
-
-SCOPE (from the tech lead):
-${JSON.stringify({ restated_task: scope.restated_task, stack: scope.stack, requirements: scope.requirements, open_questions: scope.open_questions }, null, 2)}
-
-${findingsBlock(exploreFindings, researchFindings)}
-
-${decompositionRules()}
-
-Fill the structured plan completely: objective, in_scope, out_of_scope, approach (cite real modules/APIs), interfaces (the contracts), data_model_changes, work_units (the DAG), test_strategy, integration_check (the full-suite + build/lint command), risks (with impact/likelihood/mitigation), rollback, acceptance_criteria (testable, from the requirements), open_questions, and plan_markdown (a readable rendering of all of the above — max 3 header levels, bullets over prose).
-
-Ground every step in the findings and match the repo's conventions. Do not invent scope the task does not call for. Return the structured plan.`;
-}
-
-function planRevisePrompt(plan, review, scope) {
-  return `You are revising your DECOMPOSED implementation plan to address a reviewer's findings. The aggregated confidence in the previous version was ${review.confidence_score}/100, below the ${CFG.threshold} bar.
-
-TASK:
-"""
-${task}
-"""
-
-REQUIREMENTS:
-${JSON.stringify(scope.requirements, null, 2)}
-
-YOUR PREVIOUS PLAN (markdown):
-${plan.plan_markdown}
-
-REVIEWER FINDINGS:
-${JSON.stringify({ weaknesses: review.weaknesses, required_changes: review.required_changes, parallelization_risks: review.parallelization_risks, dimension_scores: review.dimension_scores }, null, 2)}
-
-${decompositionRules()}
-
-Produce an improved plan resolving EVERY required change, weakness, and parallelization risk while staying in scope. Tighten unit boundaries so files are disjoint and deps are minimal; make weak sections concrete (specific files, APIs, edge cases, test assertions). Return the full structured plan again (not a diff).`;
-}
-
-function planReviewPrompt(plan, scope, lens) {
-  return `You are a Plan Quality Analyst reviewing a DECOMPOSED implementation plan. Review through this lens, but still return the full structured verdict. Score conservatively, anchored to the dimension definitions. Ignore any assumption about external research files — review only from the context provided here and the repository.
-
-REVIEW LENS — emphasize: ${lens.focus}
-
-TASK:
-"""
-${task}
-"""
-
-REQUIREMENTS the plan must satisfy:
-${JSON.stringify(scope.requirements, null, 2)}
-
-PLAN UNDER REVIEW (markdown):
-${plan.plan_markdown}
-
-WORK-UNIT DAG (the parallel build graph):
-${JSON.stringify(plan.work_units, null, 2)}
-
-INTERFACES / CONTRACTS:
-${JSON.stringify(plan.interfaces, null, 2)}
-
-Do two things:
-1. SCORE the plan.
-   - dimension_scores (0-100): completeness, clarity, feasibility, risk_management, alignment, decomposition (DAG quality: bounded units, DISJOINT files, correct/minimal deps, sufficient contracts).
-   - quality_score = average of those six.
-   - confidence_score (0-100) = how confident you are the plan AS WRITTEN will succeed when built in parallel. Lower it for vagueness, an unaddressed requirement, unstated assumptions, OR a decomposition that is not actually parallel-safe (units sharing files, hidden ordering, thin contracts, cycles). THIS gates at threshold ${CFG.threshold}.
-   - verdict = "approve" if confidence_score >= ${CFG.threshold}, else "revise".
-   - strengths, weaknesses, required_changes (concrete edits; empty if approving), and parallelization_risks (units that are not safely parallel as drawn).
-2. DECIDE TDD. Set tdd_required + tdd_rationale. Require TDD for new features, bug fixes, behavior changes, and non-trivial testable logic; do NOT require it for pure config/scaffolding/generated/throwaway code. Decide from the nature of THIS work, independent of the score.
-
-Return the structured review.`;
-}
-
-function aggregateReviews(reviews) {
-  const avg = (f) =>
-    Math.round(reviews.reduce((s, r) => s + (f(r) || 0), 0) / reviews.length);
-  const ds = (k) => avg((r) => r.dimension_scores[k]);
-  const tddVotes = reviews.filter((r) => r.tdd_required).length;
-  return {
-    confidence_score: avg((r) => r.confidence_score),
-    quality_score: avg((r) => r.quality_score),
-    dimension_scores: {
-      completeness: ds('completeness'),
-      clarity: ds('clarity'),
-      feasibility: ds('feasibility'),
-      risk_management: ds('risk_management'),
-      alignment: ds('alignment'),
-      decomposition: ds('decomposition'),
-    },
-    tdd_required: tddVotes * 2 >= reviews.length,
-    tdd_rationale: reviews
-      .map((r) => `[${r.lensKey || 'lens'}] ${r.tdd_rationale}`)
-      .join(' '),
-    verdict:
-      avg((r) => r.confidence_score) >= CFG.threshold ? 'approve' : 'revise',
-    strengths: dedupe(reviews.flatMap((r) => r.strengths)),
-    weaknesses: dedupe(reviews.flatMap((r) => r.weaknesses)),
-    required_changes: dedupe(reviews.flatMap((r) => r.required_changes)),
-    parallelization_risks: dedupe(
-      reviews.flatMap((r) => r.parallelization_risks),
-    ),
-    perLens: reviews.map((r) => ({
-      lens: r.lensKey,
-      confidence: r.confidence_score,
-      tdd: r.tdd_required,
-    })),
-  };
+Return the structured brief.`;
 }
 
 const IRON_LAW =
   'TDD Iron Law: NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST. One behavior per test, clear names, real code over mocks. Watch each test FAIL for the right reason before any implementation exists.';
 
-function redPrompt(unit, plan, testCommand) {
+function redPrompt(unit, brief, testCommand) {
   return `You are in the RED phase of TDD for ONE work unit. Write ONLY this unit's failing tests — no production/implementation code at all.
 
 ${IRON_LAW}
@@ -1001,9 +557,7 @@ ${task}
 """
 
 THIS UNIT:
-${JSON.stringify({ id: unit.id, name: unit.name, domain: unit.domain, description: unit.description, public_contract: unit.public_contract, behaviors: unit.behaviors, test_files: unit.test_files, files: unit.files }, null, 2)}
-
-OVERALL TEST STRATEGY: ${plan.test_strategy}
+${JSON.stringify({ id: unit.id, name: unit.name, description: unit.description, public_contract: unit.public_contract, behaviors: unit.behaviors, test_files: unit.test_files, files: unit.files }, null, 2)}
 
 Do this:
 1. From the repo root (\`git rev-parse --show-toplevel\`), find the existing test setup and MIRROR its conventions (framework, layout, helpers, fixtures).
@@ -1014,47 +568,8 @@ Do this:
 Set unit_id="${unit.id}". Return the structured result with observed_failure = the actual failing output.`;
 }
 
-function testReviewPrompt(unit, plan, red, lens) {
-  return `You are reviewing the TESTS for ONE work unit BEFORE any implementation is written (GREEN is BLOCKED on this review). Read the actual test files from disk.
-
-REVIEW LENS — focus on: ${lens.focus}
-
-OVERALL TASK:
-"""
-${task}
-"""
-
-UNIT ${unit.id} — ${unit.name}
-BEHAVIORS the tests must encode:
-${JSON.stringify(unit.behaviors, null, 2)}
-ACCEPTANCE CRITERIA (project-level, for context):
-${JSON.stringify(plan.acceptance_criteria, null, 2)}
-
-TESTS JUST WRITTEN (RED result):
-${JSON.stringify(red, null, 2)}
-
-Through your lens, judge whether these are the RIGHT tests. Every finding needs { severity, file, issue, fix }. List uncovered behaviors/edge cases in missing_cases. Set verdict="revise" if anything critical/high is wrong or a required behavior is uncovered; else "approve". Set lens="${lens.key}". Return the structured review.`;
-}
-
-function testRevisePrompt(unit, red, findings, missing, testCommand) {
-  return `You are revising ONE unit's FAILING tests to address a test review, still in the RED phase. Do NOT write production code.
-
-${IRON_LAW}
-
-UNIT ${unit.id} — ${unit.name}
-CURRENT TESTS:
-${JSON.stringify(red, null, 2)}
-
-REVIEW FINDINGS:
-${JSON.stringify(findings, null, 2)}
-MISSING CASES TO ADD:
-${JSON.stringify(missing, null, 2)}
-
-Fix every finding and close the gaps, writing only to this unit's test_files. Re-run \`${testCommand || 'the repo test command'}\` (scoped) and confirm the tests still FAIL for the right reason. Set unit_id="${unit.id}". Return the updated structured RED result.`;
-}
-
-function greenPrompt(unit, plan, red, testCommand) {
-  return `You are in the GREEN phase of TDD for ONE work unit, running CONCURRENTLY with other units that own DIFFERENT files. Write the MINIMAL production code that makes THIS unit's failing tests pass.
+function greenPrompt(unit, brief, red, testCommand) {
+  return `You are in the GREEN phase of TDD for ONE work unit, running CONCURRENTLY with other units that own DIFFERENT files. Write the MINIMAL production code that makes THIS unit's failing tests pass, then tidy it.
 
 ${IRON_LAW}
 
@@ -1062,11 +577,11 @@ OVERALL TASK:
 """
 ${task}
 """
+
+${effortLine}
 
 THIS UNIT:
-${JSON.stringify({ id: unit.id, name: unit.name, domain: unit.domain, description: unit.description, public_contract: unit.public_contract, files: unit.files, behaviors: unit.behaviors }, null, 2)}
-
-APPROACH (context): ${clip(plan.approach, 1500)}
+${JSON.stringify({ id: unit.id, name: unit.name, description: unit.description, public_contract: unit.public_contract, files: unit.files, behaviors: unit.behaviors }, null, 2)}
 
 FAILING TESTS to satisfy (do NOT modify them):
 ${red ? JSON.stringify(red.tests_added, null, 2) : '(tests for this unit were not captured — implement to the behaviors above and run the unit tests)'}
@@ -1076,32 +591,33 @@ Rules:
 1. Edit ONLY this unit's production files (${JSON.stringify(unit.files)}). Do NOT touch other units' files or any test file (set modified_tests=false). If a test is genuinely wrong, STOP and explain in notes rather than editing it.
 2. Implement the smallest code that passes the tests; match repo conventions (CLAUDE.md / .claude/rules/ if present).
 3. RUN ONLY this unit's tests, scoped to ${JSON.stringify((red && red.test_files) || unit.test_files)}: \`${testCommand || 'the repo test command'}\`. Do NOT run a repo-wide format/lint (other agents are editing in parallel — the integration step handles the full suite). Confirm this unit's tests pass.
+4. Once green, do a quick tidy pass on YOUR files only — remove duplication/dead code, sharpen names — with NO behavior change, and confirm the unit's tests are still green.
 
 Set unit_id="${unit.id}". Return the structured result with the test_output tail.`;
 }
 
-function implementPrompt(unit, plan, testCommand) {
-  return `You are implementing ONE work unit from an approved plan directly (TDD was judged unnecessary for this work), running CONCURRENTLY with units that own DIFFERENT files.
+function buildPrompt(unit, brief, testCommand) {
+  return `You are implementing ONE work unit directly (TDD was judged unnecessary for this work), running CONCURRENTLY with units that own DIFFERENT files.
 
 OVERALL TASK:
 """
 ${task}
 """
 
-THIS UNIT:
-${JSON.stringify({ id: unit.id, name: unit.name, domain: unit.domain, description: unit.description, public_contract: unit.public_contract, files: unit.files, behaviors: unit.behaviors }, null, 2)}
+${effortLine}
 
-APPROACH (context): ${clip(plan.approach, 1500)}
+THIS UNIT:
+${JSON.stringify({ id: unit.id, name: unit.name, description: unit.description, public_contract: unit.public_contract, files: unit.files, behaviors: unit.behaviors }, null, 2)}
 
 Rules:
 1. Implement ONLY this unit's files (${JSON.stringify(unit.files)}), matching repo conventions (CLAUDE.md / .claude/rules/ if present). Do not touch other units' files. Stay within scope.
-2. Validate this unit narrowly: ${testCommand ? `run \`${testCommand}\` scoped to this unit where possible, plus ` : ''}any quick local check. Do NOT run repo-wide format/lint (parallel agents are editing; integration handles the full pass).
+2. Validate this unit narrowly: ${testCommand ? `run \`${testCommand}\` scoped to this unit where possible, plus ` : ''}any quick local check. Do NOT run repo-wide format/lint (parallel agents are editing; integration handles the full pass). Set unit_tests_pass to whether your validation passed, and modified_tests=false unless you added/changed tests deliberately.
 3. Confirm this unit's behaviors are met.
 
 Set unit_id="${unit.id}". Return the structured result.`;
 }
 
-function integrationPrompt(plan, testCommand, changedFiles, prior) {
+function integrationPrompt(brief, testCommand, changedFiles, prior) {
   const head = prior
     ? `A previous integration run FAILED. Diagnose and FIX the cross-unit issues (edit production code only — never weaken tests), then re-run.\nPREVIOUS FAILURES:\n${JSON.stringify(prior.failures, null, 2)}\n`
     : 'The work units were built in parallel. Run the WHOLE change together to catch cross-unit regressions.\n';
@@ -1111,63 +627,44 @@ ${head}
 CHANGED FILES:
 ${changedFiles.map((f) => '- ' + f).join('\n') || '(use `git status`/`git diff` to discover them)'}
 
-Run the integration check — the full test suite AND the build/lint the plan specifies: ${plan.integration_check ? `\`${plan.integration_check}\`` : testCommand ? `\`${testCommand}\` plus the repo build/lint` : 'the repo test + build commands'}.
+Run the integration check — the full test suite AND the build/lint: ${brief.integration_check ? `\`${brief.integration_check}\`` : testCommand ? `\`${testCommand}\` plus the repo build/lint` : 'the repo test + build commands'}.
 - If anything fails, ${prior ? 'fix the production code minimally and re-run until green (do not modify tests to pass).' : 'list each failure precisely.'}
 - Output must be pristine (no new errors/warnings).
 
 Return the structured result: all_tests_pass, build_ok, the output tail, and a precise failures list.`;
 }
 
-function refactorPrompt(unit, testCommand) {
-  return `You are in the REFACTOR phase for ONE work unit, running CONCURRENTLY with units that own DIFFERENT files. Tests are green. Improve clarity/structure WITHOUT changing behavior and WITHOUT touching any test.
-
-UNIT ${unit.id} — ${unit.name}
-FILES (edit only these): ${JSON.stringify(unit.files)}
-
-Do this:
-1. Clean up this unit's production code: remove duplication/dead code, sharpen names, flatten nesting, keep functions small and cohesive. Match the project's style (CLAUDE.md / .claude/rules/ if present). Add NO behavior.
-2. Touch no test and no other unit's files.
-3. Re-run this unit's scoped tests (\`${testCommand || 'the repo test command'}\`) and confirm still green. Do NOT run repo-wide format/lint.
-
-If nothing meaningfully needs refactoring, say so and leave the code. Set unit_id="${unit.id}". Return the structured result.`;
-}
-
-function reviewDimensionPrompt(dim, plan, scope, changedFiles) {
+function reviewDimensionPrompt(dim, brief, changedFiles) {
   const target = changedFiles.length
-    ? `Review these changed files (and their immediate context):\n${changedFiles.map((f) => '- ' + f).join('\n')}`
-    : 'No explicit file list was captured — use `git diff`/`git status` from the repo root to find what this run changed, and review that.';
-  return `You are reviewing the implementation just produced for the task below. Review ONLY this change and its context — do not expand scope.
+    ? `The change under attack (changed files, plus their immediate context):\n${changedFiles.map((f) => '- ' + f).join('\n')}`
+    : 'No explicit file list was captured — use `git diff`/`git status` from the repo root to find what this run changed, and attack that.';
+  return `You are an ADVERSARIAL reviewer. Your job is to REFUTE this change — assume it is broken and hunt for the proof. A change you cannot refute earns a "pass"; do not manufacture findings to look thorough.
 
-TASK:
+TASK the change claims to accomplish:
 """
 ${task}
 """
 
 REQUIREMENTS / ACCEPTANCE CRITERIA:
-${JSON.stringify(scope.requirements && scope.requirements.length ? scope.requirements : plan.acceptance_criteria, null, 2)}
-
-PLAN that was implemented (markdown):
-${clip(plan.plan_markdown, 6000)}
+${JSON.stringify(brief.requirements, null, 2)}
 
 ${target}
 
-YOUR REVIEW DIMENSION — focus exclusively here:
+YOUR ATTACK SURFACE — focus exclusively here:
 ${dim.covers}
 
-Read the actual files from disk. Return findings as { severity, location, issue, fix } with concrete \`file:line\` (or the requirement text for the requirements dimension), ordered by severity. verdict="fail" if any critical/high (or medium-worth-fixing) finding exists in your dimension, else "pass". If clean, return an empty findings array and say so. ${dim.key === 'requirements' ? 'List every unmet/partial criterion in unmet_requirements and RUN the tests as part of your check.' : ''}
+Read the actual files from disk. EVERY finding must carry evidence — a concrete \`file:line\`, a command you ran with its failing output, or a step-by-step exploit path. A suspicion without evidence is not a finding. Return findings as { severity, location, issue, evidence, fix }, ordered by severity. verdict="fail" if any critical/high finding survives your own scrutiny, else "pass". confidence_score = how confident you are in your verdict. If you genuinely cannot refute the change, return an empty findings array and say so in the summary. Set dimension="${dim.key}".
 
 Return the structured review.`;
 }
 
 function reportPrompt(
-  scope,
-  plan,
-  review,
+  brief,
   useTDD,
+  devSummary,
   waves,
-  impl,
-  reviews,
   integration,
+  reviews,
   changedFiles,
 ) {
   const reviewDigest = reviews.map((r) => ({
@@ -1177,19 +674,17 @@ function reportPrompt(
     findings: r.findings,
     unmet_requirements: r.unmet_requirements || [],
   }));
-  return `You are a release engineer writing a consolidated lifecycle report and persisting it. Operate from the repo root.
+  return `You are a release engineer writing a consolidated build report and persisting it. Operate from the repo root.
 
-WRITE a markdown report to \`.claude/plans/lifecycle-${slug}.md\` (create the directory if needed; if that exact file already exists, append \`-2\`, \`-3\`, … until free). Follow the project's documentation rules if present (no emojis; bullets over prose; max 3 header levels; bold for emphasis). Include, in order:
+WRITE a markdown report to \`.claude/plans/build-${slug}.md\` (create the directory if needed; if that exact file already exists, append \`-2\`, \`-3\`, … until free). Follow the project's documentation rules if present (no emojis; bullets over prose; max 3 header levels; bold for emphasis). Include, in order:
 1. Title + the task.
-2. Scope summary (stack, requirements, open questions).
-3. The plan (embed plan_markdown) and the work-unit DAG.
-4. Plan review: aggregated confidence ${review.confidence_score}/100 (threshold ${CFG.threshold}), quality ${review.quality_score}/100, dimension scores, per-lens votes, and the TDD decision (used: ${useTDD ? 'TDD' : 'direct build'}).
-5. Build summary: parallel ${useTDD ? 'RED/review/GREEN/refactor' : 'direct build'} across ${waves.length} wave(s) [${waves.map((w) => w.map((u) => u.id).join('+')).join(' , ')}], the integration result, and the changed files.
-6. Final review: a table of the ${reviews.length} dimensions (verdict + confidence), then all findings grouped by severity, then any unmet requirements.
-7. Verdict & next steps.
+2. Intake summary: requirements, open questions, and the TDD decision (directive: ${brief.plan_tdd_directive}; used: ${useTDD ? 'TDD' : 'direct build'}; rationale: ${clip(brief.tdd_rationale, 300)}).
+3. Build summary: developer tier ${devSummary}, ${waves.length} wave(s) [${waves.map((w) => w.map((u) => u.id).join('+')).join(' , ')}], the integration result, and the changed files.
+4. Adversarial review: a table of the ${reviews.length} dimensions (verdict + confidence), then all findings grouped by severity WITH their evidence, then any unmet requirements.
+5. Verdict & next steps.
 
 DATA (JSON):
-${JSON.stringify({ requirements: scope.requirements, open_questions: scope.open_questions, plan_markdown: plan.plan_markdown, work_units: plan.work_units, plan_review: { confidence_score: review.confidence_score, quality_score: review.quality_score, dimension_scores: review.dimension_scores, tdd_required: review.tdd_required, used_tdd: useTDD, per_lens: review.perLens }, integration: integration, changed_files: changedFiles, final_reviews: reviewDigest }, null, 2)}
+${JSON.stringify({ requirements: brief.requirements, open_questions: brief.open_questions, work_units: brief.work_units, tdd: { directive: brief.plan_tdd_directive, used: useTDD, rationale: brief.tdd_rationale }, integration: integration, changed_files: changedFiles, reviews: reviewDigest }, null, 2)}
 
 After writing, set: report_path = the file you wrote; overall_verdict = "fail" if any dimension has a critical finding, an unmet requirement, or integration is red; "needs-work" if any high/medium findings remain; else "pass". blocking_findings = the critical/high items + any integration failure that must be fixed before merge. summary = 2-3 sentences. Return the structured result.`;
 }
@@ -1198,183 +693,78 @@ After writing, set: report_path = the file you wrote; overall_verdict = "fail" i
 // Orchestration
 // ---------------------------------------------------------------------------
 
-phase('Scope');
-log(`Scoping: ${clip(task, 120)}`);
-const scope = await agent(scopePrompt(), {
+phase('Intake');
+log(
+  handoffMode
+    ? 'Intake: no task/plan args — working from the project handoff'
+    : `Intake: ${clip(task, 120)}${planPath ? ` (plan: ${planPath})` : planInline ? ' (inline plan)' : ' (no plan)'}`,
+);
+const brief = await agent(intakePrompt(), {
   agentType: 'Explore',
-  model: MODELS.scope,
-  schema: SCOPE_SCHEMA,
-  phase: 'Scope',
-  label: 'scope',
+  model: MODELS.intake,
+  schema: INTAKE_SCHEMA,
+  phase: 'Intake',
+  label: 'intake',
 });
-const testCommand = CFG.testCommand || scope.test_command || '';
-let exploreTargets = (scope.explore_targets || []).slice(0, CFG.maxExplorers);
-if (!exploreTargets.length)
-  exploreTargets = [
-    {
-      area: 'overall structure',
-      why: 'no targets identified — survey the codebase the task touches',
-    },
-  ];
-const researchTopics = (scope.research_topics || []).slice(
-  0,
-  CFG.maxResearchers,
-);
-log(
-  `Stack: ${clip(scope.stack, 90)} · test: ${testCommand || '(none)'} · ${exploreTargets.length} explore + ${researchTopics.length} research (parallel) · ${scope.requirements.length} requirements`,
-);
-
-phase('Explore & Research');
-// Barrier: the planner legitimately needs the COMPLETE picture before planning.
-const findings = (
-  await parallel([
-    ...exploreTargets.map(
-      (t) => () =>
-        agent(explorePrompt(t), {
-          agentType: 'Explore',
-          model: MODELS.explore,
-          phase: 'Explore & Research',
-          label: `explore:${sanitize(t.area)}`,
-        }).then((text) => ({ area: t.area, text })),
-    ),
-    ...researchTopics.map(
-      (r) => () =>
-        agent(researchPrompt(r), {
-          agentType: 'Researcher',
-          model: MODELS.research,
-          phase: 'Explore & Research',
-          label: `research:${sanitize(r.library)}`,
-        }).then((text) => ({ topic: r.library, text })),
-    ),
-  ])
-).filter(Boolean);
-const exploreFindings = findings.filter((f) => f.area);
-const researchFindings = findings.filter((f) => f.topic);
-
-phase('Plan');
-log('Drafting the decomposed implementation plan');
-let plan = await agent(planPrompt(scope, exploreFindings, researchFindings), {
-  agentType: 'Plan',
-  model: MODELS.plan,
-  schema: PLAN_SCHEMA,
-  phase: 'Plan',
-  label: 'plan:v1',
-});
-
-async function reviewPlan(planObj, version) {
-  const raw = (
-    await parallel(
-      planLenses.map(
-        (lens) => () =>
-          agent(planReviewPrompt(planObj, scope, lens), {
-            agentType: 'Plan Reviewer',
-            model: MODELS.planReview,
-            schema: PLAN_REVIEW_SCHEMA,
-            phase: 'Plan Review',
-            label: `review:v${version}:${lens.key}`,
-          }).then((r) => ({ ...r, lensKey: lens.key })),
-      ),
-    )
-  ).filter(Boolean);
-  return aggregateReviews(raw);
+// Handoff gate: with no caller-supplied task, a found handoff IS the task;
+// with none found, stop and ask the user rather than inventing work.
+if (handoffMode && brief.task_source !== 'handoff') {
+  log('No handoff found — stopping; the user must be asked what to implement');
+  return {
+    status: 'needs-input',
+    reason:
+      'No task/plan args were given and no handoff file exists (checked project/handoffs/handoff.md and searched the repo). Ask the user what to implement, then re-run with args.',
+    openQuestions: brief.open_questions || [],
+  };
 }
-
-phase('Plan Review');
-let review = await reviewPlan(plan, 1);
-let revisions = 0;
-while (
-  review.confidence_score < CFG.threshold &&
-  revisions < CFG.maxPlanRevisions
-) {
-  revisions++;
-  log(
-    `Plan confidence ${review.confidence_score}/100 < ${CFG.threshold} — revising (${revisions}/${CFG.maxPlanRevisions})`,
-  );
-  phase('Plan');
-  plan = await agent(planRevisePrompt(plan, review, scope), {
-    agentType: 'Plan',
-    model: MODELS.plan,
-    schema: PLAN_SCHEMA,
-    phase: 'Plan',
-    label: `plan:v${revisions + 1}`,
-  });
-  phase('Plan Review');
-  review = await reviewPlan(plan, revisions + 1);
-}
-
-const approved = review.confidence_score >= CFG.threshold;
+if (!task) task = (brief.restated_task || '').trim() || 'the handoff task';
+const slug = slugify(input.slug || task);
+if (brief.handoff_path)
+  log(`Handoff: ${brief.handoff_path} — ${clip(brief.restated_task, 120)}`);
+const testCommand = CFG.testCommand || brief.test_command || '';
 const useTDD =
-  typeof CFG.forceTDD === 'boolean' ? CFG.forceTDD : !!review.tdd_required;
+  typeof CFG.forceTDD === 'boolean' ? CFG.forceTDD : !!brief.use_tdd;
+const tddSource =
+  typeof CFG.forceTDD === 'boolean'
+    ? 'forced'
+    : brief.plan_tdd_directive !== 'silent'
+      ? 'plan'
+      : 'assessed';
+
+// Resolve the developer tier from the task size (args.taskSize overrides the
+// intake classification; args.models.developer overrides the model).
+const sizeArg = (input.taskSize || '').toLowerCase();
+const sizeKey = SIZES.includes(sizeArg)
+  ? sizeArg
+  : SIZES.includes(brief.task_size)
+    ? brief.task_size
+    : 'm';
+const sizeSource = SIZES.includes(sizeArg)
+  ? 'forced'
+  : brief.plan_size_directive && brief.plan_size_directive !== 'silent'
+    ? 'plan'
+    : 'assessed';
+const devTier = DEV_TIERS[sizeKey];
+const developerModel = MODELS.developer || devTier.model;
+const effortLine = EFFORT_LINES[devTier.effort];
 log(
-  `Plan review: confidence ${review.confidence_score}/100 (${planLenses.length} lens) — ${approved ? 'APPROVED' : 'NOT approved'}. TDD ${useTDD ? 'REQUIRED' : 'not required'}${CFG.forceTDD !== undefined ? ' (forced)' : ''}.`,
+  `TDD ${useTDD ? 'ON' : 'OFF'} (${tddSource}: ${clip(brief.tdd_rationale, 140)}) · test: ${testCommand || '(none)'} · ${brief.requirements.length} requirement(s)`,
+);
+log(
+  `Task size ${sizeKey.toUpperCase()} (${sizeSource}) → developer: ${developerModel} @ ${devTier.effort} effort`,
 );
 
-if (!approved) {
-  log(
-    `Halting before implementation — plan never reached confidence ${CFG.threshold} after ${revisions} revision(s). Returning plan + last review.`,
-  );
-  return {
-    status: 'plan-not-approved',
-    task,
-    scope,
-    plan,
-    review,
-    threshold: CFG.threshold,
-    revisions,
-    useTDD,
-  };
-}
-
-// ---- HUMAN CHECKPOINT (the only one) -------------------------------------
-// The plan is approved by review. Pause here so a human can read it before any
-// code is written. Resume the SAME run to build:
-//   Workflow({ scriptPath, resumeFromRunId: <runId>, args: { ...args, proceed: true } })
-// On resume everything above replays from cache (no re-spend); only the
-// implement phases below run live. `proceed` does not affect any prompt above,
-// so the cached prefix stays intact. Pass proceed=true on the first run to skip.
-const proceed = input.proceed === true || input.approvePlan === true;
-if (!proceed) {
-  log(
-    'Plan approved by review — PAUSING for human review before implementation. Resume the same run with args.proceed=true to build.',
-  );
-  return {
-    status: 'awaiting-plan-approval',
-    task,
-    useTDD,
-    threshold: CFG.threshold,
-    planConfidence: review.confidence_score,
-    planQuality: review.quality_score,
-    planRevisions: revisions,
-    planMarkdown: plan.plan_markdown,
-    workUnits: (plan.work_units || []).map((u) => ({
-      id: u.id,
-      name: u.name,
-      domain: u.domain,
-      files: u.files,
-      depends_on: u.depends_on,
-    })),
-    openQuestions: (scope.open_questions || []).concat(plan.open_questions || []),
-    plan,
-    review,
-    scope,
-    resume:
-      'Relaunch Workflow({ scriptPath, resumeFromRunId: <runId from this run> }) with args.proceed=true to build the plan unchanged. The explore/plan/review phases replay from cache (no extra cost); only implementation runs live. To change the plan instead, re-run from scratch with adjusted args.',
-  };
-}
-
-// Build the work units + parallel schedule.
-let units = (plan.work_units || []).filter((u) => u && u.id);
+let units = (brief.work_units || []).filter((u) => u && u.id).slice(0, CFG.maxUnits);
 if (!units.length)
   units = [
     {
       id: 'U1',
       name: 'implementation',
-      domain: 'backend',
-      description: plan.objective || task,
+      description: brief.restated_task || task,
       files: [],
       test_files: [],
       public_contract: '',
-      behaviors: plan.acceptance_criteria || [],
+      behaviors: brief.requirements || [],
       depends_on: [],
     },
   ];
@@ -1383,154 +773,77 @@ log(
   `${units.length} work unit(s) → ${waves.length} wave(s): ${waves.map((w) => w.map((u) => u.id).join('+')).join(' , ')}`,
 );
 
-let redByUnit = new Map();
+const redByUnit = new Map();
 let changedFiles = [];
-let implResults = [];
 
 if (useTDD) {
-  // RED + per-unit test review as a pipeline: each unit flows independently,
-  // no inter-stage barrier. The pipeline's completion IS the barrier that
-  // guarantees every unit's tests are written AND reviewed before any GREEN.
-  phase('Tests (RED) & Review');
-  log(
-    `Writing failing tests for ${units.length} unit(s) in parallel; ${testLenses.length} review lens(es) each`,
-  );
-  const reviewed = (
-    await pipeline(
-      units,
-      // Stage 1: RED — write this unit's failing tests
-      (unit) =>
-        agent(redPrompt(unit, plan, testCommand), {
-          agentType: 'Test Author',
-          model: MODELS.testAuthor,
-          schema: RED_SCHEMA,
-          phase: 'Tests (RED) & Review',
-          label: `red:${unit.id}`,
-        }).then((red) => ({ unit, red })),
-      // Stage 2: multi-lens test review + bounded revise loop (all before GREEN)
-      async ({ unit, red }) => {
-        let cur = red;
-        let tr = 0;
-        let lensReviews = [];
-        while (true) {
-          lensReviews = (
-            await parallel(
-              testLenses.map(
-                (lens) => () =>
-                  agent(testReviewPrompt(unit, plan, cur, lens), {
-                    agentType: 'Test Reviewer',
-                    model: MODELS.testReview,
-                    schema: TEST_REVIEW_SCHEMA,
-                    phase: 'Tests (RED) & Review',
-                    label: `test-review:${unit.id}:${lens.key}`,
-                  }),
-              ),
-            )
-          ).filter(Boolean);
-          const needsRevise = lensReviews.some((rv) => rv.verdict === 'revise');
-          if (!needsRevise || tr >= CFG.maxTestRevisions) break;
-          tr++;
-          const findings = lensReviews.flatMap((rv) => rv.findings);
-          const missing = dedupe(lensReviews.flatMap((rv) => rv.missing_cases));
-          cur = await agent(
-            testRevisePrompt(unit, cur, findings, missing, testCommand),
-            {
-              agentType: 'Test Author',
-              model: MODELS.testAuthor,
-              schema: RED_SCHEMA,
-              phase: 'Tests (RED) & Review',
-              label: `red:${unit.id}:rev${tr}`,
-            },
-          );
-        }
-        const approvedTests = !lensReviews.some(
-          (rv) => rv.verdict === 'revise',
-        );
-        if (!approvedTests)
-          log(
-            `Unit ${unit.id}: tests still flagged after ${tr} revision(s) — proceeding; see report`,
-          );
-        return {
-          unit,
-          red: cur,
-          reviews: lensReviews,
-          approvedTests,
-          testRevisions: tr,
-        };
-      },
+  // RED — failing tests per unit, in parallel. No production code exists yet,
+  // so test files cannot collide with build files.
+  phase('Tests (RED)');
+  log(`Writing failing tests for ${units.length} unit(s) in parallel`);
+  const reds = (
+    await parallel(
+      units.map(
+        (u) => () =>
+          agent(redPrompt(u, brief, testCommand), {
+            agentType: 'general-purpose',
+            model: MODELS.testAuthor,
+            schema: RED_SCHEMA,
+            phase: 'Tests (RED)',
+            label: `red:${u.id}`,
+          }),
+      ),
     )
   ).filter(Boolean);
-  reviewed.forEach((r) => redByUnit.set(r.unit.id, r.red));
-
-  // GREEN — dependency/file-disjoint waves (parallel within each wave).
-  phase('Implement');
-  const greens = [];
-  for (let i = 0; i < waves.length; i++) {
-    const wave = waves[i];
-    log(
-      `GREEN wave ${i + 1}/${waves.length}: ${wave.map((u) => u.id).join(', ')} (parallel)`,
-    );
-    const res = (
-      await parallel(
-        wave.map(
-          (u) => () =>
-            agent(greenPrompt(u, plan, redByUnit.get(u.id), testCommand), {
-              agentType: devFor(u),
-              model: MODELS.developer,
-              schema: GREEN_SCHEMA,
-              phase: 'Implement',
-              label: `green:${u.id}:${u.domain || 'backend'}`,
-            }),
-        ),
-      )
-    ).filter(Boolean);
-    greens.push(...res);
-  }
-  implResults = greens;
-  if (greens.some((g) => g.modified_tests))
-    log(
-      'WARNING: a GREEN agent reported modifying tests — TDD violated; check the report',
-    );
-  changedFiles = dedupe([
-    ...reviewed.flatMap((r) => r.red.test_files || []),
-    ...greens.flatMap((g) => g.files_touched || []),
-  ]);
-} else {
-  // Direct build — also parallel by wave.
-  phase('Implement');
-  const builds = [];
-  for (let i = 0; i < waves.length; i++) {
-    const wave = waves[i];
-    log(
-      `Build wave ${i + 1}/${waves.length}: ${wave.map((u) => u.id).join(', ')} (parallel)`,
-    );
-    const res = (
-      await parallel(
-        wave.map(
-          (u) => () =>
-            agent(implementPrompt(u, plan, testCommand), {
-              agentType: devFor(u),
-              model: MODELS.developer,
-              schema: IMPLEMENT_SCHEMA,
-              phase: 'Implement',
-              label: `build:${u.id}:${u.domain || 'backend'}`,
-            }),
-        ),
-      )
-    ).filter(Boolean);
-    builds.push(...res);
-  }
-  implResults = builds;
-  changedFiles = dedupe(builds.flatMap((b) => b.files_touched || []));
+  reds.forEach((r) => redByUnit.set(r.unit_id, r));
+  changedFiles = dedupe(reds.flatMap((r) => r.test_files || []));
 }
+
+// Implement — GREEN (TDD) or direct build, in dependency/file-disjoint waves.
+phase('Implement');
+const builds = [];
+for (let i = 0; i < waves.length; i++) {
+  const wave = waves[i];
+  log(
+    `${useTDD ? 'GREEN' : 'Build'} wave ${i + 1}/${waves.length}: ${wave.map((u) => u.id).join(', ')} (parallel)`,
+  );
+  const res = (
+    await parallel(
+      wave.map(
+        (u) => () =>
+          agent(
+            useTDD
+              ? greenPrompt(u, brief, redByUnit.get(u.id), testCommand)
+              : buildPrompt(u, brief, testCommand),
+            {
+              agentType: 'general-purpose',
+              model: developerModel,
+              schema: BUILD_SCHEMA,
+              phase: 'Implement',
+              label: `${useTDD ? 'green' : 'build'}:${u.id}`,
+            },
+          ),
+      ),
+    )
+  ).filter(Boolean);
+  builds.push(...res);
+}
+if (useTDD && builds.some((b) => b.modified_tests))
+  log(
+    'WARNING: a GREEN agent reported modifying tests — TDD violated; check the report',
+  );
+changedFiles = dedupe([
+  ...changedFiles,
+  ...builds.flatMap((b) => b.files_touched || []),
+]);
 
 // Integration gate — run the whole change together once; bounded fix loop.
 phase('Integration');
 log('Running the full suite + build to catch cross-unit regressions');
 let integration = await agent(
-  integrationPrompt(plan, testCommand, changedFiles, null),
+  integrationPrompt(brief, testCommand, changedFiles, null),
   {
-    agentType: 'Debugger',
+    agentType: 'general-purpose',
     model: MODELS.integration,
     schema: INTEGRATION_SCHEMA,
     phase: 'Integration',
@@ -1547,9 +860,9 @@ while (
     `Integration red (${integration.failures.length} failure(s)) — fix attempt ${fixes}/${CFG.maxIntegrationFixes}`,
   );
   integration = await agent(
-    integrationPrompt(plan, testCommand, changedFiles, integration),
+    integrationPrompt(brief, testCommand, changedFiles, integration),
     {
-      agentType: 'Debugger',
+      agentType: 'general-purpose',
       model: MODELS.integration,
       schema: INTEGRATION_SCHEMA,
       phase: 'Integration',
@@ -1563,47 +876,19 @@ log(
     : 'Integration still red — surfaced in the report',
 );
 
-// REFACTOR — TDD only; parallel across the same file-disjoint waves.
-if (useTDD) {
-  phase('Refactor');
-  for (let i = 0; i < waves.length; i++) {
-    const wave = waves[i];
-    const res = (
-      await parallel(
-        wave.map(
-          (u) => () =>
-            agent(refactorPrompt(u, testCommand), {
-              agentType: devFor(u),
-              model: MODELS.refactor,
-              schema: REFACTOR_SCHEMA,
-              phase: 'Refactor',
-              label: `refactor:${u.id}:${u.domain || 'backend'}`,
-            }),
-        ),
-      )
-    ).filter(Boolean);
-    changedFiles = dedupe([
-      ...changedFiles,
-      ...res.flatMap((r) => r.files_touched || []),
-    ]);
-  }
-}
-
-// FINAL REVIEW — fan out across dimensions (incl. security + requirements).
-phase('Final Review');
-log(
-  `Reviewing across ${REVIEW_DIMENSIONS.length} dimensions in parallel (incl. security + requirements)`,
-);
+// Adversarial review — three skeptics, each trying to refute the change.
+phase('Adversarial Review');
+log('3 adversarial reviewers attacking the change: correctness+tests, security, requirements');
 const reviews = (
   await parallel(
     REVIEW_DIMENSIONS.map(
       (dim) => () =>
-        agent(reviewDimensionPrompt(dim, plan, scope, changedFiles), {
+        agent(reviewDimensionPrompt(dim, brief, changedFiles), {
           agentType: dim.agent,
           model: dim.model,
           schema: DIMENSION_REVIEW_SCHEMA,
-          phase: 'Final Review',
-          label: `review:${dim.key}`,
+          phase: 'Adversarial Review',
+          label: `refute:${dim.key}`,
         }).then((r) => ({ ...r, key: dim.key })),
     ),
   )
@@ -1613,25 +898,23 @@ const failedDims = reviews
   .map((r) => r.key);
 log(
   failedDims.length
-    ? `Review flagged: ${failedDims.join(', ')}`
-    : 'All review dimensions passed',
+    ? `Refuted on: ${failedDims.join(', ')}`
+    : 'No reviewer could refute the change',
 );
 
 phase('Report');
 const report = await agent(
   reportPrompt(
-    scope,
-    plan,
-    review,
+    brief,
     useTDD,
+    `${sizeKey.toUpperCase()} (${sizeSource}) → ${developerModel} @ ${devTier.effort} effort`,
     waves,
-    implResults,
-    reviews,
     integration,
+    reviews,
     changedFiles,
   ),
   {
-    agentType: 'Report Writer',
+    agentType: 'general-purpose',
     model: MODELS.report,
     schema: REPORT_SCHEMA,
     phase: 'Report',
@@ -1639,18 +922,22 @@ const report = await agent(
   },
 );
 log(
-  `Lifecycle complete — overall: ${report.overall_verdict}. Report: ${report.report_path}`,
+  `Build complete — overall: ${report.overall_verdict}. Report: ${report.report_path}`,
 );
 
 return {
   status: 'complete',
   task,
+  taskSource: brief.task_source,
+  handoffPath: brief.handoff_path || '',
   useTDD,
-  threshold: CFG.threshold,
-  planConfidence: review.confidence_score,
-  planRevisions: revisions,
+  tddSource,
+  tddRationale: brief.tdd_rationale,
+  taskSize: sizeKey,
+  sizeSource,
+  developerModel,
+  developerEffort: devTier.effort,
   units: units.length,
-  models: MODELS,
   waves: waves.map((w) => w.map((u) => u.id)),
   integrationGreen: integration.all_tests_pass && integration.build_ok,
   changedFiles,
@@ -1660,6 +947,7 @@ return {
     confidence: r.confidence_score,
     findings: r.findings.length,
   })),
+  openQuestions: brief.open_questions,
   overallVerdict: report.overall_verdict,
   blockingFindings: report.blocking_findings,
   reportPath: report.report_path,

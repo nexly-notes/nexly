@@ -4,11 +4,13 @@ Exposes the ``ProjectManager`` class with a ``run(command, **kwargs)``
 dispatcher. The CLI wrapper lives in ``project_manager.cli``.
 
 Schema summary (one **item** shape for stories AND sub-issues):
-- Status enum: ``Backlog`` / ``In Progress`` / ``Done`` (case-sensitive).
+- Status enum: ``Backlog`` / ``Ready`` / ``In Progress`` / ``In Review`` /
+  ``Done`` (case-sensitive).
 - Priority enum: ``P0`` / ``P1`` / ``P2``.
 - Items carry: title, description, status, priority, goal, notes,
   start_date, end_date, acceptance_criteria, labels, blocked_by (issue
-  numbers), size, points, issue_number, and (parents only) tasks.
+  numbers, or item titles pre-mint — ``sync`` converts titles to numbers),
+  size, points, issue_number, and (parents only) tasks.
 - Identity/dedup is ``title`` (pre-sync) → ``issue_number`` (post-sync).
   ``id`` and ``type`` are gone.
 """
@@ -21,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import DATA_PATHS
+from .validation import validate_backlog
 
 # ---------------------------------------------------------------------------
 # File paths
@@ -37,9 +40,10 @@ DEFAULT_TEMPLATE = TEMPLATES_DIR / "issue_view.txt"
 PRIORITY_ORDER = {"P0": 0, "P1": 1, "P2": 2}
 STATUS_ORDER = {
     "Done": 0,
-    "In Progress": 1,
-    "Ready": 2,
-    "Backlog": 3,
+    "In Review": 1,
+    "In Progress": 2,
+    "Ready": 3,
+    "Backlog": 4,
 }
 # Derived "workable" status. `resolve` promotes unblocked Backlog items here;
 # `ready` lists items already sitting in it.
@@ -47,12 +51,14 @@ READY_STATUS = "Ready"
 # Backlog items in these statuses are candidates for `resolve` to mark Ready.
 ACTIVE_STATUSES = {"Backlog"}
 
-# Solo-dev state machine. `Backlog → Ready → In Progress → Done` is the happy
-# path; the reverse arrows let a user demote a status without --force.
+# Solo-dev state machine. `Backlog → Ready → In Progress → In Review → Done`
+# is the happy path; the reverse arrows let a user demote a status without
+# --force. A reopened Done item goes back to work, not review.
 VALID_TRANSITIONS: dict[str, set[str]] = {
     "Backlog": {"In Progress", "Ready"},
     "Ready": {"In Progress", "Backlog"},
-    "In Progress": {"Done", "Backlog"},
+    "In Progress": {"Done", "Backlog", "In Review"},
+    "In Review": {"Done", "In Progress"},
     "Done": {"In Progress"},
 }
 
@@ -127,6 +133,25 @@ def _save_json(data: dict, path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _dict_tasks(story: dict[str, Any]) -> list[dict]:
+    """Return only dict-shaped tasks.
+
+    Some backlogs carry plain-string checklist lines in ``tasks``; those are
+    not sub-issue items and are skipped by every item-level operation.
+
+    Args:
+        story (dict): Story record.
+
+    Returns:
+        list[dict]: The story's sub-issue items.
+
+    Example:
+        >>> _dict_tasks({"tasks": ["note", {"title": "X"}]})
+        [{'title': 'X'}]
+    """
+    return [t for t in story.get("tasks", []) if isinstance(t, dict)]
+
+
 def _item_matches_key(item: dict[str, Any], key: str) -> bool:
     """Return True if *item* is identified by *key* (issue number or title).
 
@@ -175,7 +200,7 @@ def _find_item_by_key(
     for story in backlog.get("stories", []):
         if _item_matches_key(story, key):
             return story, None
-        for task in story.get("tasks", []):
+        for task in _dict_tasks(story):
             if _item_matches_key(task, key):
                 return task, story
     return None, None
@@ -218,7 +243,7 @@ def _flatten_items(backlog: dict) -> list[dict[str, Any]]:
         items.append(_normalize_item(story))
     for story in backlog.get("stories", []):
         parent_title = story.get("title", "")
-        for task in story.get("tasks", []):
+        for task in _dict_tasks(story):
             items.append(_normalize_item(task, parent_title))
     return items
 
@@ -271,39 +296,46 @@ def _validate_transition(current: str, new: str) -> str | None:
     return None
 
 
-def is_unblocked(item_blocked_by: list[int], status_by_number: dict[int, str]) -> bool:
-    return all(status_by_number.get(dep, "") == "Done" for dep in item_blocked_by)
+def is_unblocked(
+    item_blocked_by: list[int | str], status_by_key: dict[int | str, str]
+) -> bool:
+    return all(status_by_key.get(dep, "") == "Done" for dep in item_blocked_by)
 
 
-def _record_status(status: dict[int, str], item: dict) -> None:
+def _record_status(status: dict[int | str, str], item: dict) -> None:
     num = item.get("issue_number")
     if num is not None:
         status[num] = item.get("status", "")
+    title = item.get("title", "")
+    if title:
+        status[title] = item.get("status", "")
 
 
-def build_status_map_from_backlog(backlog: dict) -> dict[int, str]:
-    """Map every item's ``issue_number`` to its ``status`` (parents + children).
+def build_status_map_from_backlog(backlog: dict) -> dict[int | str, str]:
+    """Map every item's ``issue_number`` AND ``title`` to its ``status``.
 
-    ``blocked_by`` lists hold issue numbers, so the map is keyed by number
-    across both nesting levels — a story can be blocked by a sub-issue and
-    vice versa. Items without an ``issue_number`` contribute nothing (they
-    can't be a numeric blocker target yet).
+    ``blocked_by`` entries are issue numbers (int) or item titles (str,
+    pre-mint), so the map carries both keys across both nesting levels — a
+    story can be blocked by a sub-issue and vice versa. Python keeps ``123``
+    and ``"123"`` distinct, so an all-digits title never collides with a
+    number. Items without an ``issue_number`` still contribute their title
+    key, so readiness works on a never-synced backlog.
 
     Args:
         backlog (dict): Parsed backlog data.
 
     Returns:
-        dict[int, str]: ``{issue_number: status}``.
+        dict[int | str, str]: ``{issue_number_or_title: status}``.
 
     Example:
         >>> build_status_map_from_backlog(
-        ...     {"stories": [{"issue_number": 5, "status": "Done"}]})
-        {5: 'Done'}
+        ...     {"stories": [{"title": "S", "issue_number": 5, "status": "Done"}]})
+        {5: 'Done', 'S': 'Done'}
     """
-    status: dict[int, str] = {}
+    status: dict[int | str, str] = {}
     for story in backlog.get("stories", []):
         _record_status(status, story)
-        for task in story.get("tasks", []):
+        for task in _dict_tasks(story):
             _record_status(status, task)
     return status
 
@@ -616,7 +648,7 @@ def _check_status_transition(item: dict, updates: dict, force: bool) -> str | No
 def _all_tasks(backlog: dict) -> list[dict]:
     tasks: list[dict] = []
     for s in backlog.get("stories", []):
-        tasks.extend(s.get("tasks", []))
+        tasks.extend(_dict_tasks(s))
     return tasks
 
 
@@ -656,7 +688,7 @@ def _print_story_completion(stories: list[dict]) -> None:
 
 def _print_per_story_row(story: dict) -> None:
     title = story.get("title", "")[:40]
-    story_tasks = story.get("tasks", [])
+    story_tasks = _dict_tasks(story)
     total = len(story_tasks)
     if total == 0:
         print(f"  {title:<40} (no tasks)")
@@ -680,12 +712,12 @@ _PRIORITY_RANK = {"P0": 0, "P1": 1, "P2": 2}
 
 
 def _filter_ready_stories(
-    stories: list[dict], status_by_number: dict[int, str], story_filter: str | None
+    stories: list[dict], status_by_key: dict[int | str, str], story_filter: str | None
 ) -> list[dict]:
     return [
         s for s in stories
         if s.get("status") in ACTIVE_STATUSES
-        and _is_unblocked(s.get("blocked_by", []), status_by_number)
+        and _is_unblocked(s.get("blocked_by", []), status_by_key)
         and (story_filter is None or _item_matches_key(s, story_filter))
     ]
 
@@ -755,6 +787,17 @@ def _resolve_unblocked_in_place(stories: list[dict]) -> int:
 
 
 # ---------------------------------------------------------------------------
+# validate helpers
+# ---------------------------------------------------------------------------
+
+
+def _print_validation_errors(errors: list[str]) -> None:
+    print(f"Backlog validation failed ({len(errors)} error(s)):", file=sys.stderr)
+    for err in errors:
+        print(f"  - {err}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # Add-issue / add-subissue builders
 # ---------------------------------------------------------------------------
 
@@ -804,8 +847,10 @@ class ProjectManager:
         "progress": "progress",
         "sync": "sync",
         "pull": "pull",
+        "push-status": "push_status",
         "ready": "ready",
         "resolve": "resolve",
+        "validate": "validate",
     }
 
     def __init__(self, backlog_path: Path | None = None) -> None:
@@ -1083,9 +1128,10 @@ class ProjectManager:
         """Promote unblocked ``Backlog`` stories to ``Ready`` and save.
 
         Readiness is derived: a story qualifies when its ``status`` is
-        ``Backlog`` and every ``blocked_by`` issue number resolves to a
-        ``Done`` item (across both nesting levels). Sub-issues are never
-        resolved. This is the only place readiness is computed and written.
+        ``Backlog`` and every ``blocked_by`` entry — issue number or item
+        title — resolves to a ``Done`` item (across both nesting levels).
+        Sub-issues are never resolved. This is the only place readiness is
+        computed and written.
 
         Args:
             story (str | None): Narrow to one story (title or issue number).
@@ -1107,8 +1153,8 @@ class ProjectManager:
         """
         backlog = self.load_backlog()
         stories = backlog.get("stories", [])
-        status_by_number = _build_status_map_from_backlog(backlog)
-        candidates = _filter_ready_stories(stories, status_by_number, story)
+        status_by_key = _build_status_map_from_backlog(backlog)
+        candidates = _filter_ready_stories(stories, status_by_key, story)
         candidates.sort(key=_ready_sort_key)
         if top:
             candidates = candidates[:1]
@@ -1123,6 +1169,29 @@ class ProjectManager:
         print(f"Resolved {resolved} item(s) to Ready.")
         return 0
 
+    # -- validate ----------------------------------------------------------
+
+    def validate(self) -> int:
+        """Validate the backlog's ``blocked_by`` graph (no GitHub calls).
+
+        Runs :func:`validate_backlog`: duplicate item titles, entry types,
+        dangling title refs, self-blocks, duplicate refs, and cycles.
+
+        Returns:
+            int: 0 when valid; 1 with one error per stderr line otherwise.
+
+        Example:
+            >>> ProjectManager(p).validate()  # doctest: +SKIP
+            Backlog is valid.
+            Return: 0
+        """
+        errors = validate_backlog(self.load_backlog())
+        if errors:
+            _print_validation_errors(errors)
+            return 1
+        print("Backlog is valid.")
+        return 0
+
     # -- sync / pull -------------------------------------------------------
 
     def sync(
@@ -1130,12 +1199,21 @@ class ProjectManager:
         *,
         dry_run: bool = False,
         delete_all: bool = False,
+        resolve_first: bool = True,
         repo: str | None = None,
         project: int | None = None,
         owner: str | None = None,
     ) -> int:
         from .sync import Syncer
 
+        if not delete_all:
+            # Fail before the resolve-first local write runs on a bad graph.
+            errors = validate_backlog(self.load_backlog())
+            if errors:
+                _print_validation_errors(errors)
+                return 1
+        if resolve_first and not delete_all:
+            self._resolve_before_sync(dry_run)
         syncer = Syncer(
             backlog_path=self.backlog_path,
             repo=repo, project=project, owner=owner,
@@ -1144,10 +1222,28 @@ class ProjectManager:
             return syncer.run("delete-all", dry_run=dry_run)
         return syncer.run("sync", dry_run=dry_run)
 
+    def _resolve_before_sync(self, dry_run: bool) -> None:
+        """Promote unblocked Backlog stories to Ready so the push carries them.
+
+        A dry run must not mutate ``backlog.json``, so it only reports the
+        candidates ``resolve`` would promote.
+        """
+        if not dry_run:
+            self.resolve()
+            return
+        backlog = self.load_backlog()
+        candidates = _filter_ready_stories(
+            backlog.get("stories", []),
+            _build_status_map_from_backlog(backlog),
+            None,
+        )
+        print(f"Would resolve {len(candidates)} item(s) to Ready.")
+
     def pull(
         self,
         *,
         dry_run: bool = False,
+        statuses: bool = False,
         repo: str | None = None,
         project: int | None = None,
         owner: str | None = None,
@@ -1156,6 +1252,8 @@ class ProjectManager:
 
         Args:
             dry_run (bool): Print a per-item diff and write nothing.
+            statuses (bool): Also make GitHub authoritative for ``status``
+                (closed issues map to ``Done``, else the board status).
             repo, project, owner: Optional config overrides.
 
         Returns:
@@ -1174,4 +1272,35 @@ class ProjectManager:
             backlog_path=self.backlog_path,
             repo=repo, project=project, owner=owner,
         )
-        return syncer.run("pull", dry_run=dry_run)
+        return syncer.run("pull", dry_run=dry_run, statuses=statuses)
+
+    def push_status(
+        self,
+        *,
+        dry_run: bool = False,
+        only: list[int] | None = None,
+        repo: str | None = None,
+        project: int | None = None,
+        owner: str | None = None,
+    ) -> int:
+        """Push only the Status board field for numbered items (thin delegate).
+
+        Args:
+            dry_run (bool): Print the planned updates and write nothing.
+            only (list[int] | None): Limit to these issue numbers.
+            repo, project, owner: Optional config overrides.
+
+        Returns:
+            int: ``Syncer.run("push-status")`` exit code.
+
+        Example:
+            >>> ProjectManager(p).push_status(dry_run=True)  # doctest: +SKIP
+            Return: 0
+        """
+        from .sync import Syncer
+
+        syncer = Syncer(
+            backlog_path=self.backlog_path,
+            repo=repo, project=project, owner=owner,
+        )
+        return syncer.run("push-status", dry_run=dry_run, only=only)

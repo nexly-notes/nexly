@@ -24,16 +24,24 @@ examples:
   python -m project_manager.cli add-issue --title "Research X"
   python -m project_manager.cli summary -g priority
   python -m project_manager.cli resolve
+  python -m project_manager.cli validate
   python -m project_manager.cli ready
   python -m project_manager.cli ready --top
   python -m project_manager.cli sync --dry-run
+  python -m project_manager.cli sync --no-resolve
   python -m project_manager.cli sync --delete-all
   python -m project_manager.cli pull --dry-run
+  python -m project_manager.cli pull --statuses
+  python -m project_manager.cli push-status --dry-run
+  python -m project_manager.cli push-status --only 12 14
 """
 
 
 def _add_list_filter_flags(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--status", help="Filter by status (Backlog, In Progress, Done)")
+    p.add_argument(
+        "--status",
+        help="Filter by status (Backlog, Ready, In Progress, In Review, Done)",
+    )
     p.add_argument("--priority", help="Filter by priority (P0, P1, P2)")
     p.add_argument("--subissues", help="Show sub-issues of a parent (title or issue number)")
 
@@ -87,7 +95,10 @@ def _add_update_groom_flags(p: argparse.ArgumentParser) -> None:
 def _add_update_parser(sub: Any) -> None:
     p = sub.add_parser("update", help="Update any item (story or sub-issue)")
     p.add_argument("key", help="Item title or issue number")
-    p.add_argument("--status", help="Set status (Backlog, In Progress, Done)")
+    p.add_argument(
+        "--status",
+        help="Set status (Backlog, Ready, In Progress, In Review, Done)",
+    )
     p.add_argument("--priority", help="Set priority (P0, P1, P2)")
     p.add_argument("--title", help="Set title")
     p.add_argument("--description", help="Set description (free text)")
@@ -128,12 +139,33 @@ def _add_sync_parser(sub: Any) -> None:
         "--delete-all", action="store_true",
         help="Close all issues and remove them from the project",
     )
+    p.add_argument(
+        "--no-resolve", dest="resolve_first", action="store_false",
+        help="Skip auto-promoting unblocked Backlog stories to Ready first",
+    )
     _add_sync_override_flags(p)
 
 
 def _add_pull_parser(sub: Any) -> None:
     p = sub.add_parser("pull", help="Mirror GitHub state back into backlog.json")
     p.add_argument("--dry-run", action="store_true", help="Print diff without writing")
+    p.add_argument(
+        "--statuses", action="store_true",
+        help="Also pull statuses (closed issue -> Done, else the board status)",
+    )
+    _add_sync_override_flags(p)
+
+
+def _add_push_status_parser(sub: Any) -> None:
+    p = sub.add_parser(
+        "push-status",
+        help="Push only the Status board field for items with an issue number",
+    )
+    p.add_argument("--dry-run", action="store_true", help="Preview without modifying")
+    p.add_argument(
+        "--only", nargs="+", type=int,
+        help="Limit the push to these issue numbers",
+    )
     _add_sync_override_flags(p)
 
 
@@ -160,6 +192,13 @@ def _add_resolve_parser(sub: Any) -> None:
     )
 
 
+def _add_validate_parser(sub: Any) -> None:
+    sub.add_parser(
+        "validate",
+        help="Validate the backlog's blocked_by graph (titles/numbers, no GitHub calls)",
+    )
+
+
 def _register_subparsers(sub: Any) -> None:
     _add_list_parser(sub)
     _add_view_parser(sub)
@@ -170,8 +209,10 @@ def _register_subparsers(sub: Any) -> None:
     sub.add_parser("progress", help="Show backlog completion stats")
     _add_sync_parser(sub)
     _add_pull_parser(sub)
+    _add_push_status_parser(sub)
     _add_ready_parser(sub)
     _add_resolve_parser(sub)
+    _add_validate_parser(sub)
 
 
 def _build_parser() -> argparse.ArgumentParser:

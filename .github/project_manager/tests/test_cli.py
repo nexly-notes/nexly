@@ -37,7 +37,8 @@ class TestParser:
         help_text = cli._build_parser().format_help()
         for cmd in [
             "list", "view", "update", "summary", "add-issue", "add-subissue",
-            "progress", "sync", "pull", "ready", "resolve",
+            "progress", "sync", "pull", "push-status", "ready", "resolve",
+            "validate",
         ]:
             assert cmd in help_text
 
@@ -172,6 +173,14 @@ class TestParser:
         args = cli._build_parser().parse_args(["resolve", "--story", "S", "--top"])
         assert args.story == "S" and args.top is True
 
+    def test_validate_minimal(self):
+        args = cli._build_parser().parse_args(["validate"])
+        assert args.command == "validate"
+
+    def test_validate_takes_no_flags(self):
+        with pytest.raises(SystemExit):
+            cli._build_parser().parse_args(["validate", "--story", "S"])
+
     def test_sync_accepts_overrides(self):
         args = cli._build_parser().parse_args(
             ["sync", "--repo", "me/r", "--project", "7", "--owner", "me"]
@@ -183,6 +192,33 @@ class TestParser:
             ["pull", "--dry-run", "--repo", "me/r", "--project", "7", "--owner", "me"]
         )
         assert args.dry_run is True
+        assert args.repo == "me/r" and args.project == 7 and args.owner == "me"
+
+    def test_pull_statuses_flag(self):
+        assert cli._build_parser().parse_args(["pull", "--statuses"]).statuses is True
+        assert cli._build_parser().parse_args(["pull"]).statuses is False
+
+    def test_sync_no_resolve_flag(self):
+        assert cli._build_parser().parse_args(
+            ["sync", "--no-resolve"]).resolve_first is False
+        assert cli._build_parser().parse_args(["sync"]).resolve_first is True
+
+    def test_push_status_parser(self):
+        args = cli._build_parser().parse_args(
+            ["push-status", "--dry-run", "--only", "12", "14"]
+        )
+        assert args.command == "push-status"
+        assert args.dry_run is True
+        assert args.only == [12, 14]
+
+    def test_push_status_defaults(self):
+        args = cli._build_parser().parse_args(["push-status"])
+        assert args.dry_run is False and args.only is None
+
+    def test_push_status_accepts_overrides(self):
+        args = cli._build_parser().parse_args(
+            ["push-status", "--repo", "me/r", "--project", "7", "--owner", "me"]
+        )
         assert args.repo == "me/r" and args.project == 7 and args.owner == "me"
 
 
@@ -269,6 +305,10 @@ class TestMain:
         command, kwargs = fake_pm.calls[0]
         assert command == "resolve" and kwargs["top"] is True
 
+    def test_dispatches_validate(self, fake_pm):
+        assert cli.main(["validate"]) == 0
+        assert fake_pm.calls == [("validate", {})]
+
     def test_sync_dry_run(self, fake_pm):
         cli.main(["sync", "--dry-run"])
         command, kwargs = fake_pm.calls[0]
@@ -283,3 +323,19 @@ class TestMain:
         cli.main(["pull", "--repo", "o/r", "--project", "5", "--owner", "me"])
         _, kwargs = fake_pm.calls[0]
         assert kwargs["repo"] == "o/r" and kwargs["project"] == 5 and kwargs["owner"] == "me"
+
+    def test_pull_statuses_dispatch(self, fake_pm):
+        cli.main(["pull", "--statuses"])
+        command, kwargs = fake_pm.calls[0]
+        assert command == "pull" and kwargs["statuses"] is True
+
+    def test_sync_no_resolve_dispatch(self, fake_pm):
+        cli.main(["sync", "--no-resolve"])
+        command, kwargs = fake_pm.calls[0]
+        assert command == "sync" and kwargs["resolve_first"] is False
+
+    def test_push_status_dispatch(self, fake_pm):
+        cli.main(["push-status", "--dry-run", "--only", "3", "7"])
+        command, kwargs = fake_pm.calls[0]
+        assert command == "push-status"
+        assert kwargs["dry_run"] is True and kwargs["only"] == [3, 7]

@@ -10,8 +10,9 @@ Every backlog **item** — a story *or* a sub-issue — uses one unified shape. 
 project_manager/
 ├── __init__.py              # Exposes ProjectManager, Syncer
 ├── cli.py                   # argparse wrapper — entry point
-├── manager.py               # ProjectManager: list/view/update/add/progress/ready/sync/pull
+├── manager.py               # ProjectManager: list/view/update/add/progress/ready/sync/pull/push-status/validate
 ├── sync.py                  # Syncer: push (sync) + mirror-back (pull) GitHub Issues & Projects v2
+├── validation.py            # Pure blocked_by graph validation (no GitHub calls)
 ├── config.py                # Loads GitHub identity from .github/config.json; derives data paths
 ├── templates/
 │   └── issue_view.txt       # Default template for `view` command
@@ -34,23 +35,24 @@ python -m project_manager.cli <command> [options]
 
 ## Schema
 
-#### Statuses: `Backlog` · `Ready` · `In Progress` · `Done`
+#### Statuses: `Backlog` · `Ready` · `In Progress` · `In Review` · `Done`
 #### Priorities: `P0` · `P1` · `P2`
 
 `Ready` is a derived "workable" status: `resolve` promotes unblocked `Backlog`
 items into it, and `ready` lists what's sitting there. You don't hand-set it in
-the usual flow — `resolve` does.
+the usual flow — `resolve` does. `In Review` marks work with an open PR; the
+PR automation (see **GitHub Actions automation**) sets it, but `update` can too.
 
 There is **one item shape**, reused for stories and sub-issues. Identity is the **`title`** (globally unique across all items, pre-sync) → **`issue_number`** (GitHub identity, minted by `sync`). There is no `id` and no `type`.
 
 ```
 item := {
   "title": str, "description": str,
-  "status": "Backlog|In Progress|Done", "priority": "P0|P1|P2",
+  "status": "Backlog|Ready|In Progress|In Review|Done", "priority": "P0|P1|P2",
   "goal": str, "notes": str,
   "start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD",
   "acceptance_criteria": [str, ...], "labels": [str, ...],
-  "blocked_by": [int, ...],          # issue numbers (backward-only ⇒ acyclic)
+  "blocked_by": [int|str, ...],      # issue numbers (durable) or item titles (pre-mint)
   "size": str, "points": int|null,
   "issue_number": int|null,          # minted by sync
   "tasks": [item, ...]               # parents only; sub-issues are leaves
@@ -61,7 +63,7 @@ root := { "project": str, "description": str,
           "stories": [item, ...] }
 ```
 
-A **lean** item (only `title`/`description`/`tasks`, `status` defaulting to `Backlog`, everything else empty) and a fully **groomed** item both load and sync without error. `blocked_by` holds **issue numbers**, so dependencies are named only after the blocker has been synced.
+A **lean** item (only `title`/`description`/`tasks`, `status` defaulting to `Backlog`, everything else empty) and a fully **groomed** item both load and sync without error. `blocked_by` entries are **issue numbers** (the durable form — also how external issues are referenced) or **item titles** (the pre-mint authoring form; exact, case-sensitive match against another item in the file). `sync` converts title entries to the minted numbers and writes them back, so dependencies can be authored before any issue exists.
 
 ```json
 {
@@ -93,12 +95,14 @@ A **lean** item (only `title`/`description`/`tasks`, `status` defaulting to `Bac
 }
 ```
 
-### Two-pass authoring flow
+### Authoring flow (single pass)
 
 1. **Author** a lean backlog — each item carries only `title`, `description`, `tasks`.
-2. **`sync`** — GitHub mints `issue_number`s (deduped by **title**), written back to parents *and* children.
-3. **Groom** — fill `priority/goal/notes/dates/acceptance_criteria/labels/size/points` on parents *and* sub-issues; name hard deps as `blocked_by` issue numbers (backward-only ⇒ acyclic).
-4. **`sync` again** — idempotent: bodies, labels, board fields (incl. dates), blocked-by edges, parent↔child sub-issue links.
+2. **Groom** — fill `priority/goal/notes/dates/acceptance_criteria/labels/size/points` on parents *and* sub-issues; name hard deps in `blocked_by` **by title** (keep references backward-only as a convention — `validate` rejects actual cycles).
+3. **`validate`** (optional but cheap) — catches dangling titles, self-blocks, duplicates, and cycles before anything touches GitHub.
+4. **`sync`** — validates, mints `issue_number`s (deduped by **title**), **converts title deps to the minted numbers**, sets the blocked-by edges, and writes numbers + converted deps back. Re-syncs are idempotent: bodies, labels, board fields (incl. dates), blocked-by edges, parent↔child sub-issue links.
+
+Numbers stay the durable form — after a sync the file carries only ints, and `pull` keeps it that way. Mixing is fine: reference already-minted items (or external issues) by number and not-yet-minted ones by title.
 
 ---
 
@@ -149,14 +153,15 @@ python -m project_manager.cli update 447 --ac "Green CI" "Docs updated"
 
 #### Status transitions
 
-Valid flow: `Backlog → Ready → In Progress → Done`. Reverse arrows let you demote without `--force`. `resolve` writes the `Backlog → Ready` hop for you; you advance `Ready → In Progress` with `update`.
+Valid flow: `Backlog → Ready → In Progress → In Review → Done`. Reverse arrows let you demote without `--force`. `resolve` writes the `Backlog → Ready` hop for you; you advance `Ready → In Progress` with `update`; the PR automation writes `In Progress → In Review`. `In Progress → Done` stays valid (review is optional), and a reopened `Done` item goes back to `In Progress`, not review.
 
-| From         | To                       |
-|--------------|--------------------------|
-| Backlog      | Ready, In Progress       |
-| Ready        | In Progress, Backlog     |
-| In Progress  | Done, Backlog            |
-| Done         | In Progress              |
+| From         | To                            |
+|--------------|-------------------------------|
+| Backlog      | Ready, In Progress            |
+| Ready        | In Progress, Backlog          |
+| In Progress  | In Review, Done, Backlog      |
+| In Review    | Done, In Progress             |
+| Done         | In Progress                   |
 
 `--force` bypasses the guardrail for one-shot overrides.
 
@@ -193,9 +198,19 @@ python -m project_manager.cli progress
 
 Header is `{project} - {description}`. Shows overall completion, story status distribution, story completion, and per-story done ratios (child sub-issues with `status == "Done"` / total children).
 
+### validate
+
+Validates the backlog's `blocked_by` graph — pure local check, **no GitHub calls**. Errors: duplicate item titles, entries that aren't an int or str, title entries that don't exactly match another item's title (case-sensitive), self-blocks, duplicate references in one list (including an int and the title of the same item), and dependency cycles. Dangling **numeric** refs are legal (external issues). `sync` runs the same checks before any GitHub write.
+
+```bash
+python -m project_manager.cli validate
+```
+
+Exit code `0` when valid; `1` with one error per stderr line otherwise.
+
 ### resolve
 
-Derives readiness and **writes it**: promotes every workable `Backlog` story to the `Ready` status. A story is workable when its status is `Backlog` and every `blocked_by` issue number resolves to a `Done` item (across both nesting levels), or it has no deps. Sub-issues are never resolved. This is the only command that computes readiness; `ready` just reads the result.
+Derives readiness and **writes it**: promotes every workable `Backlog` story to the `Ready` status. A story is workable when its status is `Backlog` and every `blocked_by` entry — issue number or item title — resolves to a `Done` item (across both nesting levels), or it has no deps. Title deps make this work on a never-synced backlog. Sub-issues are never resolved. This is the only command that computes readiness; `ready` just reads the result.
 
 Candidates rank by `priority` (P0 < P1 < P2), then `title`.
 
@@ -223,20 +238,23 @@ Pushes **every item** (stories + sub-issues) to GitHub Issues + Projects (v2). R
 ```bash
 python -m project_manager.cli sync
 python -m project_manager.cli sync --dry-run                 # read-only preview
+python -m project_manager.cli sync --no-resolve              # skip the auto-resolve step
 python -m project_manager.cli sync --repo owner/repo --project 5 --owner owner
 python -m project_manager.cli sync --delete-all
 python -m project_manager.cli sync --delete-all --dry-run
 ```
 
-Passes: ensure required board fields + options (incl. the `Ready` Status option) → resolve/create issues (title-deduped) → refresh bodies → reconcile labels → add to project + batch field updates (Status · Priority · Start date · Target date) → set blocked-by edges → reconcile native sub-issue links → write minted numbers back.
+`sync` first auto-resolves: unblocked `Backlog` stories are promoted to `Ready` (same as running `resolve`) so the push carries them. `--no-resolve` skips it; a `--dry-run` only reports what would be promoted and writes nothing.
+
+Passes: **validate** the `blocked_by` graph (errors abort before any GitHub write) → ensure required board fields + options (incl. the `Ready` and `In Review` Status options) → resolve/create issues (title-deduped) → **convert title `blocked_by` entries to the minted numbers** → refresh bodies → reconcile labels → add to project + batch field updates (Status · Priority · Start date · Target date) → set blocked-by edges → reconcile native sub-issue links → write minted numbers + converted deps back.
 
 > Local `end_date` maps to GitHub's built-in **`Target date`** board field (not a separate "End date" field). `start_date` maps to `Start date`.
 
-> The board's `Status` field needs a `Ready` option for `resolve`'s output to push. `sync` ensures it: it's included when the field is created, and appended to a pre-existing `Status` field (existing options are re-sent so they're preserved; their colors reset to gray once when `Ready` is first added).
+> The board's `Status` field needs `Ready` and `In Review` options for `resolve`'s and the PR automation's output to push. `sync` (and `push-status`) ensure them: both are included when the field is created, and appended to a pre-existing `Status` field (existing options are re-sent so they're preserved; their colors reset to gray once when an option is first added). Option matching is **case-sensitive** — the board option must read exactly `In Review`.
 
 The issue body is rebuilt from the item's `description` and its `acceptance_criteria` (`## Acceptance Criteria` checklist). Tasks are **native sub-issues**, not body checkboxes. Field/body/edge/link passes diff against the remote snapshot, so an unchanged re-sync emits zero create/link mutations.
 
-> `sync --dry-run` is **fully read-only**: it reads the open-issue list and the project's fields, prints a plan (issues it would create, how many it would update, and any missing board fields or the `Ready` option it would add), and makes **zero** GitHub writes. (`pull --dry-run` is likewise read-only.)
+> `sync --dry-run` is **fully read-only**: it validates the backlog (an invalid graph still exits 1), reads the open-issue list and the project's fields, prints a plan (issues it would create, how many it would update, and any missing board fields or the `Ready` option it would add), and makes **zero** GitHub writes — title `blocked_by` entries are **not** converted. (`pull --dry-run` is likewise read-only.)
 
 ### pull
 
@@ -245,10 +263,36 @@ Mirrors GitHub state back into `backlog.json` (full mirror).
 ```bash
 python -m project_manager.cli pull
 python -m project_manager.cli pull --dry-run                 # prints a per-item diff, writes nothing
+python -m project_manager.cli pull --statuses                # board/issue state also wins for `status`
 python -m project_manager.cli pull --repo owner/repo --project 5 --owner owner
 ```
 
 **GitHub wins** per item for `priority`, `labels`, `title`, `description`, `blocked_by`, and the parent↔child sub-issue structure. **Preserved locally** (never overwritten): each item's `status`, `start_date`/`end_date`, `goal`, `notes`, `size`, `points`, `acceptance_criteria`, and the root `dates`. A new GitHub issue becomes a new story (or a sub-issue of a known parent); board-absent local stories are kept as-is. The tree follows GitHub's sub-issue links, flattened to one level. Run `sync` before `pull` so every item is numbered and on the board.
+
+With `--statuses`, GitHub also wins for `status`: a **closed** issue maps to `Done` (regardless of its board column), an open issue takes its board Status, and an item with neither keeps its local status. This is the opt-in the Actions automation uses — the repo copy of `backlog.json` is stale on a runner, so statuses must come from GitHub before computing anything.
+
+> Because GitHub wins for `blocked_by`, pulled lists are always sorted issue **numbers** — pulling **before** a converting `sync` discards any title deps that were never synced. Sync first.
+
+### push-status
+
+Pushes **only the Status board field** for items that already have an `issue_number`. The automation-safe narrow write: no issue creation, no body/label/sub-issue reconcile, no backlog writeback. Unchanged statuses diff-skip, so a no-op run sends zero mutations.
+
+```bash
+python -m project_manager.cli push-status
+python -m project_manager.cli push-status --dry-run          # read-only preview
+python -m project_manager.cli push-status --only 12 14       # limit to these issue numbers
+```
+
+---
+
+## GitHub Actions automation
+
+Two workflows keep the board current (`.github/workflows/`). Both write the **board only** — `backlog.json` is never committed back — and share one concurrency group so board writes serialize. Auth is the `PROJECT_TOKEN` repo secret (classic PAT with `repo` + `project` scopes; the default `GITHUB_TOKEN` cannot write user-owned Projects v2).
+
+1. **`promote-ready.yml`** — on issue close: `pull --statuses` → `resolve` → `push-status`. A global reconcile, so every unblocked Backlog story is promoted regardless of which issue triggered it.
+2. **`pr-in-review.yml`** — on PR open / ready-for-review / reopen: linked issues (via `Closes #N`) that are `In Progress` move to `In Review` and only those are pushed (`push-status --only`).
+
+*Known limitation:* `resolve` is promote-only — reopening a blocker does not demote dependents out of `Ready`; demote by hand with `update`.
 
 ---
 

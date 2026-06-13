@@ -19,10 +19,10 @@
 
 > Each row is an ADR. Add rows as decisions are made; mark superseded ones rather than deleting.
 
-| ID  | Decision     | Why it was chosen           | Trade-off accepted     |
-| :-- | :----------- | :-------------------------- | :--------------------- |
-| 001 | `<Decision>` | `<Constraint that drove it>` | `<What we give up>`    |
-| 002 |              |                              |                        |
+| ID  | Decision     | Why it was chosen            | Trade-off accepted  |
+| :-- | :----------- | :--------------------------- | :------------------ |
+| 001 | `<Decision>` | `<Constraint that drove it>` | `<What we give up>` |
+| 002 |              |                              |                     |
 
 ---
 
@@ -32,15 +32,15 @@
 
 **Style:** `<Modular monolith / Microservices / Serverless / Event-driven>` — `<one-line rationale>`
 
-| Layer              | Tech                                          |
-| :----------------- | :-------------------------------------------- |
-| Language / runtime | `<e.g., TypeScript on Node 20>`               |
-| Frontend           | `<framework, state, hosting>`                 |
-| Backend / API      | `<framework, REST/GraphQL/gRPC, validation>`  |
-| Datastore          | `<engine, hosting, ORM, pooling>`             |
-| Async / jobs       | `<runner, or N/A>`                            |
-| Auth               | `<provider, method>`                          |
-| Infra / hosting    | `<platform(s)>`                               |
+| Layer              | Tech                                         |
+| :----------------- | :------------------------------------------- |
+| Language / runtime | `<e.g., TypeScript on Node 20>`              |
+| Frontend           | `<framework, state, hosting>`                |
+| Backend / API      | `<framework, REST/GraphQL/gRPC, validation>` |
+| Datastore          | `<engine, hosting, ORM, pooling>`            |
+| Async / jobs       | `<runner, or N/A>`                           |
+| Auth               | `<provider, method>`                         |
+| Infra / hosting    | `<platform(s)>`                              |
 
 **Module boundaries:** `<one or two rules — e.g., transport may import core; core may not import transport.>`
 
@@ -65,9 +65,9 @@
 
 ## 5. Risks
 
-| Risk           | Likelihood       | Impact           | Mitigation        |
-| :------------- | :--------------- | :--------------- | :---------------- |
-| `<risk>`       | Low / Med / High | Low / Med / High | `<how mitigated>` |
+| Risk     | Likelihood       | Impact           | Mitigation        |
+| :------- | :--------------- | :--------------- | :---------------- |
+| `<risk>` | Low / Med / High | Low / Med / High | `<how mitigated>` |
 
 **Assumptions that, if wrong, change the design:** `<e.g., traffic stays below X; auth model stays simple>`
 
