@@ -1,29 +1,26 @@
 name: Codex code review
 
-# AI code review on pull requests using OpenAI Codex (headless `codex exec`).
+# AI code review on pull requests using the official OpenAI Codex GitHub Action
+# (openai/codex-action@v1). The action installs the Codex CLI and starts the
+# Responses API proxy from OPENAI_API_KEY — the supported way to authenticate
+# `codex exec` in CI. (A bare `codex exec` with only the env var set reaches the
+# Responses endpoint with no bearer and fails with 401 "missing bearer".)
 #
-# Security model: Codex runs in a READ-ONLY sandbox with no GitHub token, so the
-# model can read the repo for context but cannot edit files, write over the
-# network, or touch the PR. It only emits review text to a file. A separate,
-# trusted step posts that text as a sticky PR comment using the built-in
-# GITHUB_TOKEN — the agent and the write credential never share a step, so a
-# prompt-injection in a diff can't escalate into repo/PR writes.
+# Security model: Codex runs in a READ-ONLY sandbox — no file writes, and no
+# direct network (model calls go through the action's local proxy). A separate,
+# trusted step posts the review as a sticky PR comment with the built-in
+# GITHUB_TOKEN; the model output and the write credential never share a step, so
+# a prompt-injection in a diff can't escalate into repo/PR writes. (It could at
+# most influence the review text/verdict — an inherent limit of any AI gate.)
 #
 # Merge gate: the `codex-review` job is meant to be a REQUIRED status check. A
 # trusted final step reads the model's `VERDICT:` line from the output file and
 # fails the job on `VERDICT: FAIL` (or when no verdict is found — fail closed),
-# which blocks the merge. The gate is purely the job's exit code; the agent still
-# holds no token, so the read-only/trusted-write separation above is preserved.
+# which blocks the merge. The gate is purely the job's exit code.
 #
 # Setup:
-#   1. Add an OPENAI_API_KEY repository secret
-#      (Settings > Secrets and variables > Actions).
+#   1. Add a valid OPENAI_API_KEY repository secret with access to the model.
 #   2. Fork PRs are skipped on purpose — Actions secrets aren't exposed to forks.
-#
-# Note: `codex exec --sandbox read-only -o <file>` is the headless CLI form.
-# OpenAI also ships an `openai/codex-action`; if you prefer that, swap the
-# install + run steps for `uses: openai/codex-action@v1` and verify its input
-# names against https://github.com/openai/codex-action.
 
 on:
   pull_request:
@@ -59,42 +56,13 @@ jobs:
           echo "Changed files:"
           git diff --name-only "origin/${BASE}...HEAD"
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install Codex CLI
-        run: npm install -g @openai/codex
-
       - name: Run Codex review
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: |
-          # Quoted heredoc -> no shell expansion inside the prompt body.
-          read -r -d '' PROMPT <<'EOF' || true
-          You are an exacting senior reviewer for the NEXLY RN project.
-
-          Review ONLY the changes in pr.diff (a unified diff at the repo root).
-          First read AGENTS.md and CLAUDE.md for project scope and conventions,
-          then read whatever surrounding files you need to judge the diff fairly.
-
-          Report only:
-            - P0 — correctness, security, or data-loss defects.
-            - P1 — high-impact quality, maintainability, or spec-violation issues.
-          For each finding give: `path:line`, severity, the problem, and a concrete
-          fix. Skip nits and style. Do not restate the diff. If you find nothing at
-          P0/P1, say the change looks clean.
-
-          Output GitHub-flavored markdown only — it is posted verbatim as a PR comment.
-
-          IMPORTANT: end your output with a final line that is EXACTLY one of:
-            VERDICT: PASS   (no P0 or P1 findings)
-            VERDICT: FAIL   (one or more P0 or P1 findings)
-          This line is parsed to gate merging, so emit it verbatim, on its own
-          line, as the very last line, and nowhere else in the output.
-          EOF
-
-          codex exec --sandbox read-only -o codex-review.md "$PROMPT"
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          sandbox: read-only
+          prompt-file: .github/codex/prompts/review.md
+          output-file: codex-review.md
 
       - name: Post review as a sticky PR comment
         env:
