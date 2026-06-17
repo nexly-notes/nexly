@@ -1,0 +1,132 @@
+name: Codex code review
+
+# AI code review on pull requests using OpenAI Codex (headless `codex exec`).
+#
+# Security model: Codex runs in a READ-ONLY sandbox with no GitHub token, so the
+# model can read the repo for context but cannot edit files, write over the
+# network, or touch the PR. It only emits review text to a file. A separate,
+# trusted step posts that text as a sticky PR comment using the built-in
+# GITHUB_TOKEN — the agent and the write credential never share a step, so a
+# prompt-injection in a diff can't escalate into repo/PR writes.
+#
+# Merge gate: the `codex-review` job is meant to be a REQUIRED status check. A
+# trusted final step reads the model's `VERDICT:` line from the output file and
+# fails the job on `VERDICT: FAIL` (or when no verdict is found — fail closed),
+# which blocks the merge. The gate is purely the job's exit code; the agent still
+# holds no token, so the read-only/trusted-write separation above is preserved.
+#
+# Setup:
+#   1. Add an OPENAI_API_KEY repository secret
+#      (Settings > Secrets and variables > Actions).
+#   2. Fork PRs are skipped on purpose — Actions secrets aren't exposed to forks.
+#
+# Note: `codex exec --sandbox read-only -o <file>` is the headless CLI form.
+# OpenAI also ships an `openai/codex-action`; if you prefer that, swap the
+# install + run steps for `uses: openai/codex-action@v1` and verify its input
+# names against https://github.com/openai/codex-action.
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: codex-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Job id is the status-check context branch protection matches on.
+  codex-review:
+    # Skip drafts and fork PRs (forks can't read OPENAI_API_KEY).
+    if: >-
+      !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so we can diff against the base branch
+
+      - name: Compute PR diff
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+        run: |
+          git fetch --no-tags origin "$BASE"
+          git diff "origin/${BASE}...HEAD" > pr.diff
+          echo "Changed files:"
+          git diff --name-only "origin/${BASE}...HEAD"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex
+
+      - name: Run Codex review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          # Quoted heredoc -> no shell expansion inside the prompt body.
+          read -r -d '' PROMPT <<'EOF' || true
+          You are an exacting senior reviewer for the NEXLY RN project.
+
+          Review ONLY the changes in pr.diff (a unified diff at the repo root).
+          First read AGENTS.md and CLAUDE.md for project scope and conventions,
+          then read whatever surrounding files you need to judge the diff fairly.
+
+          Report only:
+            - P0 — correctness, security, or data-loss defects.
+            - P1 — high-impact quality, maintainability, or spec-violation issues.
+          For each finding give: `path:line`, severity, the problem, and a concrete
+          fix. Skip nits and style. Do not restate the diff. If you find nothing at
+          P0/P1, say the change looks clean.
+
+          Output GitHub-flavored markdown only — it is posted verbatim as a PR comment.
+
+          IMPORTANT: end your output with a final line that is EXACTLY one of:
+            VERDICT: PASS   (no P0 or P1 findings)
+            VERDICT: FAIL   (one or more P0 or P1 findings)
+          This line is parsed to gate merging, so emit it verbatim, on its own
+          line, as the very last line, and nowhere else in the output.
+          EOF
+
+          codex exec --sandbox read-only -o codex-review.md "$PROMPT"
+
+      - name: Post review as a sticky PR comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          marker='<!-- codex-review -->'
+          body="${marker}"$'\n'"$(cat codex-review.md)"
+          # Reuse our previous comment if one exists, so re-runs update in place
+          # instead of spamming a new comment on every push.
+          id=$(gh api "repos/${REPO}/issues/${PR}/comments" \
+                 --jq "[.[] | select(.body | startswith(\"${marker}\"))][0].id // empty")
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${id}" -f body="$body"
+          else
+            gh pr comment "$PR" --body "$body"
+          fi
+
+      # Merge gate. Trusted: reads only the model's output file (no token needed)
+      # and maps the verdict to an exit code. Runs after the comment so the verdict
+      # is always visible on the PR, even when this fails the check. Fails closed:
+      # a missing/garbled verdict blocks the merge rather than waving it through.
+      - name: Enforce review verdict (merge gate)
+        run: |
+          if grep -qE '^VERDICT: PASS[[:space:]]*$' codex-review.md; then
+            echo "Codex review passed — no P0/P1 findings."
+            exit 0
+          fi
+          if grep -qE '^VERDICT: FAIL[[:space:]]*$' codex-review.md; then
+            echo "::error::Codex review found P0/P1 findings — blocking merge. See the PR review comment."
+            exit 1
+          fi
+          echo "::error::No machine-readable VERDICT line in the Codex output — failing closed."
+          exit 1
