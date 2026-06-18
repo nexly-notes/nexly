@@ -48,16 +48,30 @@ coverage/
 Thumbs.db
 
 # --- Editor / IDE ---
-.idea/
+# No trailing slash: .idea can appear as a transient non-directory sandbox artifact.
+.idea
 *.swp
 *.swo
 .vscode/*
 !.vscode/settings.json
 !.vscode/extensions.json
 
-# --- Claude local/transient ---
-.claude/plans/
-.claude/settings.local.json
+# --- Reference repos (skills) ---
+.reference/
+
+# --- Claude (local config / tooling — not tracked) ---
+.claude/
+.agents/
 
 # --- Windows / WSL artifacts ---
 *:Zone.Identifier
+
+# --- Sandbox artifacts (shell/env dotfiles leaked into repo root) ---
+.bash_profile
+.bashrc
+.profile
+.zprofile
+.zshrc
+.gitconfig
+.ripgreprc
+test.md
