@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Reference repos cloned by skills — not project code.
+    ".reference/**",
   ]),
 ]);
 
