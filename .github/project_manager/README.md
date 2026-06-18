@@ -21,7 +21,7 @@ project_manager/
 └── tests/                   # Unit + e2e tests
 ```
 
-The backlog itself lives at the repo root: `project/backlog.json` (resolved by `config.py`).
+The backlog itself lives at the repo root: `docs/backlog.json` (resolved by `config.py`).
 
 > **Note:** the old `watcher.py` / `resolver.py` (auto-resolve + auto-sync on file edit) were removed — sync is manual now. The `watchdog` dependency is no longer used.
 

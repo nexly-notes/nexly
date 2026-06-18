@@ -1,0 +1,11 @@
+# Code owners for NEXLY RN.
+#
+# With "Require review from Code Owners" enabled in branch protection, every PR
+# into a protected branch must be approved by a matching owner below. The `*`
+# pattern makes Emz1998 the required human approver for all changes.
+#
+# Note: the last matching pattern wins, and an owner must have WRITE access to
+# the repo or no owner is assigned (the requirement silently does nothing).
+# Emz1998 must be a write collaborator for this to take effect.
+
+* @Emz1998

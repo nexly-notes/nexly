@@ -59,9 +59,19 @@ Thumbs.db
 # --- Reference repos (skills) ---
 .reference/
 
-# --- Claude local/transient ---
-.claude/plans/
-.claude/settings.local.json
+# --- Claude (local config / tooling — not tracked) ---
+.claude/
+.agents/
 
 # --- Windows / WSL artifacts ---
 *:Zone.Identifier
+
+# --- Sandbox artifacts (shell/env dotfiles leaked into repo root) ---
+.bash_profile
+.bashrc
+.profile
+.zprofile
+.zshrc
+.gitconfig
+.ripgreprc
+test.md

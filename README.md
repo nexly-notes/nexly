@@ -43,7 +43,7 @@ CI (`.github/workflows/ci.yml`) runs `npm ci → lint → typecheck → build` o
 ```
 nexly/
 ├── .github/workflows/ci.yml   # CI: lint → typecheck → build
-├── project/                   # MVP specs (source of truth for scope)
+├── docs/                      # MVP specs (source of truth for scope)
 ├── CLAUDE.md                  # Project instructions
 ├── README.md
 ├── .env.example               # Environment variable template

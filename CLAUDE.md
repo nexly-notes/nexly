@@ -17,14 +17,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Specs (source of truth for scope)
 
-- **`project/specs/mvp/prd.md`** — product requirements; `FR-`/`NFR-`/`SC-` IDs are referenced throughout.
-- **`project/specs/mvp/tech-specs.md`** — architecture, data model, performance budgets, scope boundaries.
-- **`project/specs/mvp/design.md`** — UX/UI spec (drives the Create/Edit/Study mode labels, brand accent, classic/modern shells).
+- **`docs/specs/mvp/prd.md`** — product requirements; `FR-`/`NFR-`/`SC-` IDs are referenced throughout.
+- **`docs/specs/mvp/tech-specs.md`** — architecture, data model, performance budgets, scope boundaries.
+- **`docs/specs/mvp/design.md`** — UX/UI spec (drives the Create/Edit/Study mode labels, brand accent, classic/modern shells).
 
-- **`project/ui-images/<current-phase>/`** — directory of ui images of prototype. Note, some images might contain features beyond the phase scope. Always follow the phase scope no matter what.
+- **`docs/ui-images/<current-phase>/`** — directory of ui images of prototype. Note, some images might contain features beyond the phase scope. Always follow the phase scope no matter what.
 
-- **Out of MVP scope:** `project/specs/phase-2/` and `project/specs/phase-3/`.
-- _`project/specs/deprecated/` is superseded (older three-mode + an earlier two-mode scope) — ignore it in favor of `mvp/`._
+- **Out of MVP scope:** `docs/specs/phase-2/` and `docs/specs/phase-3/`.
+- _`docs/specs/deprecated/` is superseded (older three-mode + an earlier two-mode scope) — ignore it in favor of `mvp/`._
 
 ## Commands
 
@@ -86,8 +86,22 @@ Zod validation · Supabase backend wiring (Auth + Postgres/RLS + Edge Functions)
 - Workflows must include an adversarial verification stage
 - Keep workflow scripts tight: less is more, and never exceed 10 agents
 - Always consult the user first for any out of scope decisions, tasks, and changes.
-- **Important!** Do not test Claude configuration (skills, agents, commands, workflows, output styles) — no eval runs, test agents, or baseline comparisons. Write it, review it by reading, validate through real use. Exception: hooks are code and should be tested.
+- **Important!** Do not test Claude configuration (skills, agents, commands, workflows, output styles) — no eval runs, test agents, or baseline comparisons. Write it and review it by reading; validation through real use is the **user's** job, not yours — never run the new config yourself to validate it. Exception: hooks are code and should be tested.
 
 ## Other Relevant Context
+
+- **Workflow `agent()` opts — complete surface:** the runtime reads these keys off the opts object:
+  - `label?: string` — progress-tree display label; default = first 60 chars of the prompt.
+  - `phase?: string` — progress group; default = current `phase()`.
+  - `schema?: object` — JSON Schema; forces a single `StructuredOutput` tool call and `agent()` returns the validated object instead of text.
+  - `model?: string` — model override; default = main-loop/session model.
+  - `effort?: 'low'|'medium'|'high'|'xhigh'|'max'` (validator also accepts an integer) — reasoning-effort override.
+  - `isolation?: 'worktree'` — run in a fresh git worktree (auto-removed if unchanged).
+  - `agentType?: string` — custom/built-in subagent type; default = built-in `workflow-subagent`.
+  - `stallMs?: number` — **undocumented**; watchdog that aborts the agent with reason `"stalled"` if it emits no progress for this many ms. Default `180000` (3 min). Raise it for slow-but-legitimate stages (long build/test), lower it for cheap ones.
+  - Returns a `string` normally, the validated `object` when `schema` is set, or `null` if the user skips the agent or it dies on a terminal API error after retries (hence `.filter(Boolean)`).
+- **Workflow custom-subagent effort:** Workflow `agent()` calls honor a custom subagent's frontmatter `effort` (and `model`) when spawned via `agentType`. Precedence: explicit `opts.effort` > the subagent's frontmatter `effort:` > inherited session effort. So to use an agent's declared effort, **omit** `effort` from the opts (passing it silently overrides the frontmatter). Same precedence applies to `model`.
+- **Default workflow agent:** when `agent()` is called with no `agentType`, the runtime falls back to the built-in `workflow-subagent` — all tools (`*`) except `SendUserMessage`, `Agent`, and `Workflow` (so it can't message the user, spawn its own subagents, or nest a workflow), with no `model`/`effort` of its own so it inherits the session's.
+- _All three notes above were verified against the Claude Code 2.1.179 bundle — undocumented internal behavior that may change between releases._
 
 @AGENTS.md

@@ -2,7 +2,7 @@
 
 A single Python package + CLI that drives the **backlog lifecycle** on **GitHub Issues + Projects (v2)**: author a product backlog (lean or groomed), validate it, then push it to GitHub in one command.
 
-- **Backlog** — `project/backlog.json`: a flat list of **stories**. Each story needs only `title`, `description`, and `priority`; grooming (`status`, `goal`, `notes`, `tasks`, `acceptance_criteria`, `labels`, `blocked_by`, `size`, `points`) is **optional** and added later. A **lean** backlog validates and converts just like a groomed one.
+- **Backlog** — `docs/backlog.json`: a flat list of **stories**. Each story needs only `title`, `description`, and `priority`; grooming (`status`, `goal`, `notes`, `tasks`, `acceptance_criteria`, `labels`, `blocked_by`, `size`, `points`) is **optional** and added later. A **lean** backlog validates and converts just like a groomed one.
 - **Identity** — the **GitHub issue number** is a story's identity, minted by `convert` and written back as `issue_number`. The **`title`** is the re-link key (so titles must be unique). `blocked_by` references other stories by their **issue number**.
 - **`convert`** — the single GitHub push: creates/updates one issue per story (matched by `title`), writes the issue body (Goal / Tasks / Acceptance Criteria / Notes when present), applies labels, mirrors `Status` / `Priority` / `Size` / `Points` to the board, sets `blocked_by` edges, and writes each `issue_number` back into the JSON.
 
@@ -69,7 +69,7 @@ GitHub identity lives in **`.github/config.json`** — edit it to retarget:
 
 ## Data shape
 
-- **`project/backlog.json`** — see `.claude/skills/backlog/sample_structure.json` and the `/backlog` skill. Required per story: `title` (unique), `description`, `priority`. Grooming fields are validated **only when present**.
+- **`docs/backlog.json`** — see `.claude/skills/backlog/sample_structure.json` and the `/backlog` skill. Required per story: `title` (unique), `description`, `priority`. Grooming fields are validated **only when present**.
 - **`title`** is the re-link key, so it must be unique across stories. **`issue_number`** is the identity (`0` / absent until `convert` mints it). **`blocked_by`** is a list of issue numbers; each must resolve to an in-file `issue_number` and a story may not block itself.
 - **`labels`** (when present) must include at least one **work-type label** — `feature` / `tech` / `bug` / `spike` / `chore` / `docs` / `review`; the label is the sole carrier of issue type, and domain labels (`backend`, `frontend`, …) are allowed extras but don't satisfy the rule.
 
